@@ -1,0 +1,39 @@
+# macOS
+.DS_Store
+
+# 本地视频 / 音频素材(不上传 GitHub)
+*.webm
+*.mp4
+*.mkv
+*.mov
+*.avi
+*.mp3
+*.wav
+*.m4a
+*.flac
+
+# 字幕 / 中间产物
+*.srt
+*.bilingual.srt
+*.words.json
+
+# 分割输出目录
+*.parts/
+
+# Node / Electron
+node_modules/
+dist/
+dist-electron/
+release/
+out/
+
+# 日志
+*.log
+
+# 环境变量
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/

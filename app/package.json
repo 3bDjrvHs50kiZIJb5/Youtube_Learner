@@ -1,0 +1,55 @@
+{
+  "name": "video-learner",
+  "version": "0.1.0",
+  "description": "基于 Electron 的视频英语学习工具（双语字幕 + 整句复读 + 生词本）",
+  "main": "dist-electron/main.js",
+  "author": "you",
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "pack": "electron-vite build && electron-builder --dir",
+    "dist": "electron-vite build && electron-builder"
+  },
+  "dependencies": {
+    "ali-oss": "^6.21.0",
+    "axios": "^1.7.7",
+    "dotenv": "^16.4.5",
+    "electron-store": "^8.2.0",
+    "fluent-ffmpeg": "^2.1.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zustand": "^4.5.5"
+  },
+  "devDependencies": {
+    "@types/ali-oss": "^6.23.3",
+    "@types/fluent-ffmpeg": "^2.1.26",
+    "@types/node": "^22.7.4",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.2",
+    "electron": "^32.1.2",
+    "electron-builder": "^25.0.5",
+    "electron-vite": "^2.3.0",
+    "typescript": "^5.6.2",
+    "vite": "^5.4.8"
+  },
+  "build": {
+    "appId": "com.videolearner.app",
+    "productName": "VideoLearner",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist-electron/**/*",
+      "dist/**/*"
+    ],
+    "mac": {
+      "target": "dmg"
+    },
+    "win": {
+      "target": "nsis"
+    }
+  }
+}
