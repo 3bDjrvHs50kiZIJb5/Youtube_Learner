@@ -2,6 +2,16 @@
 
 基于 Electron 的桌面视频英语学习工具，针对从 YouTube 等平台下载的本地视频。
 
+## 界面预览
+
+播放 + 双语字幕 + Karaoke 高亮 + 单句翻译：
+
+![主界面：字幕点击跳播 / 字幕跟随 / 复读 / 单句翻译](docs/assets/screenshot-annotated.png)
+
+一键处理中的 ASR 并行进度视图（多 Worker 同时跑 Paraformer-v2）：
+
+![ASR 并行进度：5/5 Workers 实时输出](docs/assets/screenshot-asr-progress.png)
+
 ## 功能
 
 - ✂ **分割视频**：按固定时长(默认 10 分钟,可选 5/15/20/30/60 或自定义)把长视频切成多段(FFmpeg `-c copy` 不重编码,速度快),输出到 `<视频名>.parts/` 目录

@@ -88,6 +88,7 @@ declare global {
     api: {
       pickVideo: () => Promise<string | null>;
       toMediaUrl: (p: string) => Promise<string>;
+      getPathForFile: (file: File) => string;
       videoSplitByTime: (
         videoPath: string,
         segmentMinutes: number

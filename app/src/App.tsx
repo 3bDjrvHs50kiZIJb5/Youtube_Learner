@@ -55,47 +55,55 @@ export default function App() {
     return () => clearTimeout(t);
   }, [toast]);
 
+  // 根据绝对路径打开视频(pickVideo 和 拖拽入口共用)
+  const openVideoByPath = useCallback(
+    async (p: string) => {
+      const url = await window.api.toMediaUrl(p);
+      setVideo(p, url);
+
+      // 恢复上次的 pipeline 状态
+      const state = await window.api.stateLoad(p);
+      if (state) {
+        setSegments(state.segments);
+        setUploaded(state.uploaded);
+        setStep('split', state.steps.split);
+        setStep('upload', state.steps.upload);
+        setStep('asr', state.steps.asr);
+        setStep('translate', state.steps.translate);
+        const restored: string[] = [];
+        if (state.steps.split === 'done') restored.push(`${state.segments.length} 段已切分`);
+        if (state.steps.upload === 'done') restored.push(`${state.uploaded.length} 段已上传`);
+        if (state.steps.asr === 'done') restored.push(`字幕已生成`);
+        if (state.steps.translate === 'done') restored.push(`翻译已完成`);
+        if (restored.length) setToast(`已恢复上次进度: ${restored.join(' · ')}`);
+      }
+
+      // 优先加载状态里记录的 SRT 路径,否则尝试同名 .srt
+      const tryPaths = [
+        state?.srtPath,
+        p.replace(/\.[^.]+$/, '.bilingual.srt'),
+        p.replace(/\.[^.]+$/, '.srt'),
+      ].filter(Boolean) as string[];
+      for (const srt of tryPaths) {
+        try {
+          const loaded = await window.api.loadSubtitle(srt);
+          if (loaded.length) {
+            setCues(loaded);
+            break;
+          }
+        } catch {
+          // ignore
+        }
+      }
+    },
+    [setVideo, setSegments, setUploaded, setStep, setCues]
+  );
+
   // ① 打开视频
   const pickVideo = async () => {
     const p = await window.api.pickVideo();
     if (!p) return;
-    const url = await window.api.toMediaUrl(p);
-    setVideo(p, url);
-
-    // 恢复上次的 pipeline 状态
-    const state = await window.api.stateLoad(p);
-    if (state) {
-      setSegments(state.segments);
-      setUploaded(state.uploaded);
-      setStep('split', state.steps.split);
-      setStep('upload', state.steps.upload);
-      setStep('asr', state.steps.asr);
-      setStep('translate', state.steps.translate);
-      const restored: string[] = [];
-      if (state.steps.split === 'done') restored.push(`${state.segments.length} 段已切分`);
-      if (state.steps.upload === 'done') restored.push(`${state.uploaded.length} 段已上传`);
-      if (state.steps.asr === 'done') restored.push(`字幕已生成`);
-      if (state.steps.translate === 'done') restored.push(`翻译已完成`);
-      if (restored.length) setToast(`已恢复上次进度: ${restored.join(' · ')}`);
-    }
-
-    // 优先加载状态里记录的 SRT 路径,否则尝试同名 .srt
-    const tryPaths = [
-      state?.srtPath,
-      p.replace(/\.[^.]+$/, '.bilingual.srt'),
-      p.replace(/\.[^.]+$/, '.srt'),
-    ].filter(Boolean) as string[];
-    for (const srt of tryPaths) {
-      try {
-        const loaded = await window.api.loadSubtitle(srt);
-        if (loaded.length) {
-          setCues(loaded);
-          break;
-        }
-      } catch {
-        // ignore
-      }
-    }
+    await openVideoByPath(p);
   };
 
   // 重置(清除切段文件 + 状态)
@@ -398,7 +406,7 @@ export default function App() {
         <button onClick={() => setSettingsOpen(true)}>⚙</button>
       </div>
 
-      <Player onAddWord={addWord} />
+      <Player onAddWord={addWord} onDropVideo={openVideoByPath} />
 
       <div className="sidebar">
         <div className="tabs">

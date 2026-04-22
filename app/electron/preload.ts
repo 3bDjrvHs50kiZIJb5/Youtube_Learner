@@ -1,10 +1,12 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 // 渲染进程可以用 window.api.xxx 调用这些方法，全部走 IPC
 const api = {
   // 文件 & 视频
   pickVideo: () => ipcRenderer.invoke('video:pick'),
   toMediaUrl: (absolutePath: string) => ipcRenderer.invoke('video:to-media-url', absolutePath),
+  // Electron 32 起 File.path 已被移除,必须通过 webUtils.getPathForFile 取绝对路径
+  getPathForFile: (file: File) => webUtils.getPathForFile(file),
   videoSplitByTime: (videoPath: string, segmentMinutes: number) =>
     ipcRenderer.invoke('video:split-by-time', videoPath, segmentMinutes),
 
