@@ -3,6 +3,7 @@ import { usePlayerStore } from '../store/player';
 import { SubtitleOverlay } from './SubtitleOverlay';
 import { ControlBar } from './ControlBar';
 import { publishVideoTime } from '../hooks/videoTime';
+import { alignAutoPausedResumePoint } from '../utils/playback';
 import type { SubtitleCue } from '../types';
 
 interface Props {
@@ -58,6 +59,12 @@ export function Player({ onAddWord, onDropVideo }: Props) {
         editingCueId ??
         (() => {
           const ms = v.currentTime * 1000;
+          if (autoPauseAtSentenceEnd && activeCueId !== null) {
+            const activeCue = cues.find((c) => c.id === activeCueId);
+            if (activeCue && ms >= activeCue.endMs && ms < activeCue.endMs + 80) {
+              return activeCue.id;
+            }
+          }
           const cur = cues.find((c) => ms >= c.startMs && ms < c.endMs);
           return cur?.id ?? null;
         })();
@@ -66,7 +73,7 @@ export function Player({ onAddWord, onDropVideo }: Props) {
     onTime();
     v.addEventListener('timeupdate', onTime);
     return () => v.removeEventListener('timeupdate', onTime);
-  }, [cues, activeCueId, editingCueId, setActiveCue]);
+  }, [cues, activeCueId, editingCueId, autoPauseAtSentenceEnd, setActiveCue]);
 
   // 句末预约调度:
   // 不再等"越过 endMs 才反应"(timeupdate 粒度 250ms / rAF 也至少差 1 帧,
@@ -77,9 +84,9 @@ export function Player({ onAddWord, onDropVideo }: Props) {
     const v = videoRef.current;
     if (!v) return;
 
-    // 比 endMs 提前一点触发,保证 pause 发生在下一句音画被解码送出之前。
-    // ~1 帧。调大会截掉句尾,调小会开始漏播。
-    const LEAD_MS = 12;
+    // 复读要一步倒回 startMs, 保留一个很小的提前量避免先漏出下一句再回跳。
+    // 精读则不提前截句尾, 只保证停住时别把字幕切到下一句。
+    const LOOP_LEAD_MS = 12;
 
     const state = schedRef.current;
 
@@ -128,6 +135,10 @@ export function Player({ onAddWord, onDropVideo }: Props) {
     const schedule = () => {
       clearTimer();
       if (v.paused) return;
+      // 恢复播放前如果刚改过 currentTime, play/playing 可能先于 seeked 到达。
+      // 这时 currentTime 还是旧句尾附近,会被误判成"已经到句末",导致第一次点击立刻又 pause。
+      // 等 seeked 后再按新时间重排句末钩子,就不会出现"要点两次播放"。
+      if (v.seeking) return;
       // 试听中: 不排句末钩子, 交给 previewCueRange 自己的定时器按编辑后的 endMs 暂停
       if (previewActiveRef.current) return;
       const needHook = autoPauseAtSentenceEnd || loopCueId !== null;
@@ -140,7 +151,8 @@ export function Player({ onAddWord, onDropVideo }: Props) {
       if (!autoPauseAtSentenceEnd && loopCueId !== cur.id) return;
 
       const rate = v.playbackRate || 1;
-      const remainMs = (cur.endMs - ms) / rate - LEAD_MS;
+      const leadMs = loopCueId === cur.id ? LOOP_LEAD_MS : 0;
+      const remainMs = (cur.endMs - ms) / rate - leadMs;
       if (remainMs <= 0) {
         // 已经贴到/越过句末(比如用户 seek 过来的),立即处理
         onCueEnd(cur);
@@ -531,6 +543,12 @@ export function Player({ onAddWord, onDropVideo }: Props) {
     const v = videoRef.current;
     if (!v) return;
     if (v.paused) {
+      alignAutoPausedResumePoint({
+        video: v,
+        cues,
+        activeCueId,
+        autoPauseAtSentenceEnd,
+      });
       v.play().catch(() => {});
     } else {
       v.pause();

@@ -1,5 +1,6 @@
 import { RefObject, useEffect, useState } from 'react';
 import { usePlayerStore } from '../store/player';
+import { alignAutoPausedResumePoint } from '../utils/playback';
 
 function fmt(sec: number): string {
   if (!isFinite(sec)) return '00:00';
@@ -24,6 +25,7 @@ export function ControlBar({ videoRef }: { videoRef: RefObject<HTMLVideoElement>
     toggleEnglish,
     toggleTranslation,
     setLoop,
+    setActiveCue,
     toggleAutoPause,
   } = usePlayerStore();
 
@@ -54,7 +56,15 @@ export function ControlBar({ videoRef }: { videoRef: RefObject<HTMLVideoElement>
   const togglePlay = () => {
     const v = videoRef.current;
     if (!v) return;
-    if (v.paused) v.play();
+    if (v.paused) {
+      alignAutoPausedResumePoint({
+        video: v,
+        cues,
+        activeCueId,
+        autoPauseAtSentenceEnd,
+      });
+      v.play().catch(() => {});
+    }
     else v.pause();
   };
 
@@ -91,7 +101,9 @@ export function ControlBar({ videoRef }: { videoRef: RefObject<HTMLVideoElement>
     // 复读开着时,切到目标句并把复读锁同步到新句,
     // 否则 timeupdate 会立刻把视频拽回旧那句的开头。
     if (loopCueId !== null) setLoop(target.id, loopRemaining);
+    setActiveCue(target.id);
     v.currentTime = target.startMs / 1000;
+    v.play().catch(() => {});
   };
 
   const toggleLoopCurrent = () => {
