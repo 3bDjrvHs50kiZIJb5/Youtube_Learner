@@ -16,7 +16,6 @@
     "ali-oss": "^6.21.0",
     "axios": "^1.7.7",
     "docx": "^9.6.1",
-    "dotenv": "^16.4.5",
     "electron-store": "^8.2.0",
     "fluent-ffmpeg": "^2.1.3",
     "react": "^18.3.1",
@@ -39,6 +38,21 @@
   "build": {
     "appId": "com.videolearner.app",
     "productName": "VideoLearner",
+    "fileAssociations": [
+      {
+        "ext": [
+          "mp4",
+          "m4v",
+          "mov",
+          "mkv",
+          "webm",
+          "avi"
+        ],
+        "name": "Video File",
+        "description": "Video file opened by VideoLearner",
+        "role": "Viewer"
+      }
+    ],
     "directories": {
       "output": "release"
     },

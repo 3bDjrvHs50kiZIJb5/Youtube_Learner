@@ -151,8 +151,10 @@ declare global {
       stateClear: (videoPath: string) => Promise<boolean>;
       stateSavePosition: (videoPath: string, positionMs: number) => Promise<boolean>;
       fileExists: (p: string) => Promise<boolean>;
+      consumePendingOpenFile: () => Promise<string | null>;
       onWorker: (cb: (e: WorkerEvent) => void) => () => void;
       onResetWorkers: (cb: (phase: WorkerPhase) => void) => () => void;
+      onOpenVideoFile: (cb: (absolutePath: string) => void) => () => void;
       loadSubtitle: (p: string) => Promise<SubtitleCue[]>;
       saveSubtitle: (videoPath: string, cues: SubtitleCue[], suffix: string) => Promise<string>;
       translateSubtitle: (cues: SubtitleCue[], target: string) => Promise<SubtitleCue[]>;

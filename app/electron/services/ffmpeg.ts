@@ -176,7 +176,7 @@ export interface SplitAudioOptions {
   /** 每段的目标时长(秒),默认 120s = 2 分钟 */
   segmentSec?: number;
   /**
-   * 允许切点偏离目标的最大秒数,默认 min(60, segmentSec * 0.2)。
+   * 允许切点偏离目标的最大秒数,默认 min(60, max(24, segmentSec * 0.2))。
    * 越大越能避开语句,但段长会更不均匀。
    */
   toleranceSec?: number;
@@ -194,13 +194,21 @@ export interface SplitAudioOptions {
  * 从 0 出发每次推进 segmentSec,在 [target-tol, target+tol] 窗口里找静音中点最接近 target 的。
  * 找不到就在 target 硬切,保证段不会无限长。
  */
+interface PickCutResult {
+  cuts: number[];
+  matchedCuts: number;
+  hardCuts: number;
+}
+
 function pickCutPoints(
   silences: SilenceInterval[],
   duration: number,
   segmentSec: number,
   toleranceSec: number
-): number[] {
+): PickCutResult {
   const cuts: number[] = [];
+  let matchedCuts = 0;
+  let hardCuts = 0;
   // 至少保留一段尾巴,避免切出过短的段
   const minSegmentSec = Math.max(5, segmentSec * 0.3);
   let lastCut = 0;
@@ -219,12 +227,14 @@ function pickCutPoints(
       if (!best || d < best.distance) best = { point: mid, distance: d };
     }
     const cut = best ? best.point : target;
+    if (best) matchedCuts++;
+    else hardCuts++;
     cuts.push(cut);
     lastCut = cut;
     target = cut + segmentSec;
   }
 
-  return cuts;
+  return { cuts, matchedCuts, hardCuts };
 }
 
 /**
@@ -242,7 +252,7 @@ export async function splitAudioSegments(opts: SplitAudioOptions): Promise<Audio
     minSilenceSec = 0.4,
     onProgress,
   } = opts;
-  const toleranceSec = opts.toleranceSec ?? Math.min(60, segmentSec * 0.2);
+  const toleranceSec = opts.toleranceSec ?? Math.min(60, Math.max(24, segmentSec * 0.2));
   if (!fs.existsSync(videoPath)) throw new Error(`视频不存在: ${videoPath}`);
 
   const duration = await getDuration(videoPath);
@@ -273,8 +283,50 @@ export async function splitAudioSegments(opts: SplitAudioOptions): Promise<Audio
   onProgress?.(25);
 
   // 第 2 阶段:挑切点
-  const cuts = pickCutPoints(silences, duration, segmentSec, toleranceSec);
-  const boundaries = [0, ...cuts, duration];
+  let cutPlan = pickCutPoints(silences, duration, segmentSec, toleranceSec);
+
+  // 如果当前参数几乎都退化成“按目标时间硬切”，自动放宽一次静音检测再试。
+  // 这类视频常见于带底噪/底乐的解说内容，默认 -30dB / 0.4s 会过严。
+  if (cutPlan.hardCuts > 0) {
+    const relaxedNoiseDb = Math.min(-15, silenceNoiseDb + 5);
+    const relaxedMinSilenceSec = Math.max(0.2, Math.min(minSilenceSec, 0.25));
+    const relaxedToleranceSec = Math.max(
+      toleranceSec,
+      Math.min(60, Math.max(36, segmentSec * 0.4))
+    );
+
+    const relaxedSilences = await detectSilence(videoPath, {
+      noiseDb: relaxedNoiseDb,
+      minSilenceSec: relaxedMinSilenceSec,
+    });
+    const relaxedPlan = pickCutPoints(
+      relaxedSilences,
+      duration,
+      segmentSec,
+      relaxedToleranceSec
+    );
+
+    if (
+      relaxedPlan.hardCuts < cutPlan.hardCuts ||
+      (relaxedPlan.hardCuts === cutPlan.hardCuts &&
+        relaxedPlan.matchedCuts > cutPlan.matchedCuts)
+    ) {
+      cutPlan = relaxedPlan;
+      console.log(
+        `[split-audio] 使用放宽静音参数: noise=${relaxedNoiseDb}dB d=${relaxedMinSilenceSec}s tol=${relaxedToleranceSec}s, matched=${relaxedPlan.matchedCuts}, hard=${relaxedPlan.hardCuts}`
+      );
+    } else {
+      console.log(
+        `[split-audio] 保持默认静音参数: noise=${silenceNoiseDb}dB d=${minSilenceSec}s tol=${toleranceSec}s, matched=${cutPlan.matchedCuts}, hard=${cutPlan.hardCuts}`
+      );
+    }
+  } else {
+    console.log(
+      `[split-audio] 默认静音参数已命中切点: noise=${silenceNoiseDb}dB d=${minSilenceSec}s tol=${toleranceSec}s, matched=${cutPlan.matchedCuts}, hard=${cutPlan.hardCuts}`
+    );
+  }
+
+  const boundaries = [0, ...cutPlan.cuts, duration];
 
   // 第 3 阶段:逐段抽出音频(占 25~100%)
   const segments: AudioSegment[] = [];

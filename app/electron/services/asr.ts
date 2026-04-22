@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { getConfig } from './config';
+import { resolveCueTimingFromWords } from './subtitle';
 import type { SubtitleCue, SubtitleWord } from './subtitle';
 
 // 阿里云百炼（DashScope）Paraformer 录音文件识别：异步任务模式
@@ -135,11 +136,15 @@ export async function transcribe(
   }
   const { data } = await axios.get<ParaformerResult>(transcriptionUrl);
   const sentences = data.transcripts?.[0]?.sentences || [];
-  return sentences.map((s, i) => ({
-    id: i,
-    startMs: s.begin_time,
-    endMs: s.end_time,
-    text: s.text.trim(),
-    words: mapWords(s.words),
-  }));
+  return sentences.map((s, i) => {
+    const words = mapWords(s.words);
+    const aligned = resolveCueTimingFromWords(words, s.begin_time, s.end_time);
+    return {
+      id: i,
+      startMs: aligned.startMs,
+      endMs: aligned.endMs,
+      text: s.text.trim(),
+      words,
+    };
+  });
 }

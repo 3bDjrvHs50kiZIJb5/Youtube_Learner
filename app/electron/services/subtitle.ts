@@ -22,6 +22,147 @@ export interface SubtitleCue {
   words?: SubtitleWord[];
 }
 
+const CUE_START_LEAD_MS = 90;
+const CUE_END_TRAIL_MS = 180;
+const CUE_MIN_GAP_MS = 20;
+
+const LEADING_FILLER_WORDS = new Set([
+  'uh',
+  'um',
+  'ah',
+  'er',
+  'hmm',
+  'mm',
+  'mhm',
+  'huh',
+  'well',
+  'so',
+  'now',
+  'okay',
+  'ok',
+  'alright',
+  'right',
+  'like',
+  'actually',
+  'basically',
+  'literally',
+]);
+
+function normalizeWordText(text: string): string {
+  return text.toLowerCase().replace(/^[^a-z0-9]+|[^a-z0-9]+$/gi, '');
+}
+
+function getTimedWords(words: SubtitleWord[] | undefined): SubtitleWord[] {
+  if (!words?.length) return [];
+  return words
+    .filter(
+      (w) =>
+        Number.isFinite(w.startMs) &&
+        Number.isFinite(w.endMs) &&
+        w.endMs >= w.startMs
+    )
+    .sort((a, b) => a.startMs - b.startMs);
+}
+
+function pickStartAnchorWord(words: SubtitleWord[]): SubtitleWord | undefined {
+  if (!words.length) return undefined;
+
+  let index = 0;
+  while (index < words.length) {
+    const cur = normalizeWordText(words[index].text);
+    const next = index + 1 < words.length ? normalizeWordText(words[index + 1].text) : '';
+
+    if (!cur) {
+      index++;
+      continue;
+    }
+    // 常见口头禅短语，句子起点直接吸附到后面的实词
+    if ((cur === 'you' && next === 'know') || (cur === 'i' && next === 'mean')) {
+      index += 2;
+      continue;
+    }
+    if (LEADING_FILLER_WORDS.has(cur)) {
+      index++;
+      continue;
+    }
+    return words[index];
+  }
+
+  return words[0];
+}
+
+/**
+ * 句级时间优先贴合字级时间戳:
+ * - 有 words 时，用首个词的 start 和最后一个词的 end 作为句子边界
+ * - words 缺失或异常时，回退到原始句级时间
+ */
+export function resolveCueTimingFromWords(
+  words: SubtitleWord[] | undefined,
+  fallbackStartMs: number,
+  fallbackEndMs: number
+): Pick<SubtitleCue, 'startMs' | 'endMs'> {
+  if (!words?.length) {
+    return { startMs: fallbackStartMs, endMs: fallbackEndMs };
+  }
+
+  const timedWords = getTimedWords(words);
+  if (!timedWords.length) {
+    return { startMs: fallbackStartMs, endMs: fallbackEndMs };
+  }
+
+  const startMs = timedWords[0].startMs;
+  const endMs = timedWords.reduce((max, w) => Math.max(max, w.endMs), timedWords[0].endMs);
+
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
+    return { startMs: fallbackStartMs, endMs: fallbackEndMs };
+  }
+
+  return { startMs, endMs };
+}
+
+/**
+ * 更接近手工校轴的句级边界:
+ * - 起点吸到第一个实词前一点点,减少前导口头禅/空拍
+ * - 终点保留少量尾音和停顿
+ * - 句间自动防重叠,尾部 padding 会被下一句截住
+ */
+export function retimeCuesFromWords(cues: SubtitleCue[]): SubtitleCue[] {
+  if (!cues.length) return cues;
+
+  const retimed = cues.map((cue) => {
+    const tight = resolveCueTimingFromWords(cue.words, cue.startMs, cue.endMs);
+    const timedWords = getTimedWords(cue.words);
+    const startAnchor = pickStartAnchorWord(timedWords);
+    const desiredStart = Math.max(
+      0,
+      (startAnchor?.startMs ?? tight.startMs) - CUE_START_LEAD_MS
+    );
+    const desiredEnd = Math.max(tight.endMs, tight.endMs + CUE_END_TRAIL_MS);
+
+    return {
+      ...cue,
+      startMs: desiredStart,
+      endMs: Math.max(desiredStart + 1, desiredEnd),
+    };
+  });
+
+  for (let i = 0; i < retimed.length - 1; i++) {
+    const current = retimed[i];
+    const next = retimed[i + 1];
+    const maxEnd = Math.max(current.startMs + 1, next.startMs - CUE_MIN_GAP_MS);
+    if (current.endMs > maxEnd) current.endMs = maxEnd;
+  }
+
+  return retimed.map((cue, i) => {
+    const next = retimed[i + 1];
+    const maxEnd = next ? Math.max(cue.startMs + 1, next.startMs - CUE_MIN_GAP_MS) : cue.endMs;
+    return {
+      ...cue,
+      endMs: Math.max(cue.startMs + 1, Math.min(cue.endMs, maxEnd)),
+    };
+  });
+}
+
 function msToSrtTime(ms: number): string {
   const h = Math.floor(ms / 3600000);
   const m = Math.floor((ms % 3600000) / 60000);
@@ -132,7 +273,14 @@ function mergeWordsFromJson(srtPath: string, cues: SubtitleCue[]): SubtitleCue[]
       const hit =
         byId.get(c.id) ??
         raw.find((r) => Math.abs(r.startMs - c.startMs) <= 150 && r.text === c.text);
-      return hit ? { ...c, words: hit.words } : c;
+      if (!hit) return c;
+      const aligned = resolveCueTimingFromWords(hit.words, c.startMs, c.endMs);
+      return {
+        ...c,
+        startMs: aligned.startMs,
+        endMs: aligned.endMs,
+        words: hit.words,
+      };
     });
   } catch (e) {
     console.warn('加载 words.json 失败,忽略:', jsonPath, e);
@@ -143,7 +291,7 @@ function mergeWordsFromJson(srtPath: string, cues: SubtitleCue[]): SubtitleCue[]
 export function loadSubtitle(srtPath: string): SubtitleCue[] {
   if (!fs.existsSync(srtPath)) return [];
   const cues = parseSrt(fs.readFileSync(srtPath, 'utf-8'));
-  return mergeWordsFromJson(srtPath, cues);
+  return retimeCuesFromWords(mergeWordsFromJson(srtPath, cues));
 }
 
 export interface TranslateBatchInfo {

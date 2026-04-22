@@ -16,6 +16,12 @@ function StepIcon({ status }: { status: StepStatus }) {
   return <span style={{ color: 'var(--muted)' }}>○</span>;
 }
 
+function isDuplicateWordError(err: unknown): boolean {
+  const name = typeof err === 'object' && err && 'name' in err ? String(err.name) : '';
+  const message = typeof err === 'object' && err && 'message' in err ? String(err.message) : '';
+  return name === 'WORD_ALREADY_EXISTS' || message.includes('单词已在生词本中');
+}
+
 export default function App() {
   const {
     videoPath,
@@ -118,6 +124,25 @@ export default function App() {
     },
     [setVideo, setSegments, setUploaded, setStep, setCues, setInitialSeek]
   );
+
+  useEffect(() => {
+    const openIncomingVideo = async (absolutePath: string) => {
+      if (!absolutePath) return;
+      try {
+        await openVideoByPath(absolutePath);
+      } catch (err: any) {
+        setToast(`打开视频失败: ${err?.message || err}`);
+      }
+    };
+
+    void window.api.consumePendingOpenFile().then((absolutePath) => {
+      if (absolutePath) void openIncomingVideo(absolutePath);
+    });
+
+    return window.api.onOpenVideoFile((absolutePath) => {
+      void openIncomingVideo(absolutePath);
+    });
+  }, [openVideoByPath]);
 
   // WordBook 的"回到语境"触发跨视频跳转:先切换到目标视频,再按 startMs 续播
   useEffect(() => {
@@ -340,20 +365,28 @@ export default function App() {
         [explanation?.pos, explanation?.meaning].filter(Boolean).join(' ').trim() ||
         explanation?.contextual ||
         cue?.translation;
-      await window.api.wordAdd({
-        word,
-        context,
-        translation,
-        videoPath: videoPath || undefined,
-        sentenceStartMs: cue?.startMs,
-        sentenceEndMs: cue?.endMs,
-        phonetic: explanation?.phonetic,
-        pos: explanation?.pos,
-        meaning: explanation?.meaning,
-        contextual: explanation?.contextual,
-      });
-      setWordRefresh((k) => k + 1);
-      setToast(`已加入生词本: ${word}`);
+      try {
+        await window.api.wordAdd({
+          word,
+          context,
+          translation,
+          videoPath: videoPath || undefined,
+          sentenceStartMs: cue?.startMs,
+          sentenceEndMs: cue?.endMs,
+          phonetic: explanation?.phonetic,
+          pos: explanation?.pos,
+          meaning: explanation?.meaning,
+          contextual: explanation?.contextual,
+        });
+        setWordRefresh((k) => k + 1);
+        setToast(`已加入生词本: ${word}`);
+      } catch (err: any) {
+        if (isDuplicateWordError(err)) {
+          setToast(`该单词已在生词本中: ${word}`);
+          return;
+        }
+        setToast(`加入生词本失败: ${err?.message || err}`);
+      }
     },
     [cues, videoPath]
   );

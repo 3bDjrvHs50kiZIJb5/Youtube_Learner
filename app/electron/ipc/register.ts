@@ -13,6 +13,7 @@ import { pMap } from '../services/pMap';
 import {
   SubtitleCue,
   SubtitleWord,
+  retimeCuesFromWords,
   saveSubtitleBesideVideo,
   loadSubtitle,
   translateCues,
@@ -412,10 +413,12 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
           concurrency
         );
 
-        const allCues: SubtitleCue[] = perSegCues
-          .flat()
-          .sort((a, b) => a.startMs - b.startMs)
-          .map((c, i) => ({ ...c, id: i }));
+        const allCues: SubtitleCue[] = retimeCuesFromWords(
+          perSegCues
+            .flat()
+            .sort((a, b) => a.startMs - b.startMs)
+            .map((c, i) => ({ ...c, id: i }))
+        );
 
         const srtPath = saveSubtitleBesideVideo(videoPath, allCues, '');
         sendProgress('done', `识别完成,共 ${allCues.length} 条`, 100);

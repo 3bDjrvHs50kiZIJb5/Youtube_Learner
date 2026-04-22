@@ -14,6 +14,7 @@ export interface UploadedRef {
 
 export interface PipelineState {
   version: 1;
+  splitStrategyVersion?: number;
   videoPath: string;
   videoSize: number;
   videoMtimeMs: number;
@@ -28,6 +29,8 @@ export interface PipelineState {
   lastPositionMs?: number;
   updatedAt: number;
 }
+
+const CURRENT_SPLIT_STRATEGY_VERSION = 2;
 
 function stateFilePath(videoPath: string): string {
   const dir = path.dirname(videoPath);
@@ -48,6 +51,7 @@ function emptyState(videoPath: string): PipelineState {
   const fp = videoFingerprint(videoPath);
   return {
     version: 1,
+    splitStrategyVersion: CURRENT_SPLIT_STRATEGY_VERSION,
     videoPath,
     videoSize: fp?.size ?? 0,
     videoMtimeMs: fp?.mtimeMs ?? 0,
@@ -80,6 +84,18 @@ export function loadState(videoPath: string): PipelineState | null {
     return null;
   }
 
+  // 切分算法升级后,旧 segments/uploaded/srt 可能来自“固定时长硬切”的历史缓存。
+  // 这类缓存继续复用会让用户误以为新策略没生效，所以直接降级整条 pipeline，
+  // 保留 lastPositionMs 等无害字段，强制后续重新切分/上传/识别。
+  if ((state.splitStrategyVersion || 0) !== CURRENT_SPLIT_STRATEGY_VERSION) {
+    state.splitStrategyVersion = CURRENT_SPLIT_STRATEGY_VERSION;
+    state.segments = [];
+    state.uploaded = [];
+    state.srtPath = undefined;
+    state.cueCount = undefined;
+    state.steps = { split: 'idle', upload: 'idle', asr: 'idle', translate: 'idle' };
+  }
+
   // 校验切段文件是否还存在
   const allSegsExist =
     state.segments.length > 0 && state.segments.every((s) => fs.existsSync(s.path));
@@ -108,6 +124,7 @@ export function saveState(videoPath: string, partial: StatePatch): PipelineState
     ...current,
     ...partial,
     steps: { ...current.steps, ...(partial.steps || {}) },
+    splitStrategyVersion: CURRENT_SPLIT_STRATEGY_VERSION,
     videoPath,
     updatedAt: Date.now(),
   };

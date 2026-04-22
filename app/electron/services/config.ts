@@ -17,30 +17,20 @@ export interface AppTTSConfig {
   speed?: number;
 }
 
-function readEnv(name: string): string {
-  return (process.env[name] || '').trim();
-}
-
 /**
- * OSS 的 bucket / region 可以内置, 但敏感的 AK/SK 必须走环境变量,
- * 避免把密钥提交进仓库。
+ * OSS 的 bucket / region / prefix 可以给默认值，
+ * AK/SK 默认留空，交给设置页写入本地配置。
  */
-const HARDCODED_OSS = {
+const DEFAULT_OSS = {
   region: 'oss-ap-northeast-1.aliyuncs.com',
   bucket: 'youtube-videos-1982',
-  accessKeyId:
-    readEnv('OSS_ACCESS_KEY_ID') || readEnv('ALIBABA_CLOUD_ACCESS_KEY_ID'),
-  accessKeySecret:
-    readEnv('OSS_ACCESS_KEY_SECRET') || readEnv('ALIBABA_CLOUD_ACCESS_KEY_SECRET'),
+  accessKeyId: '',
+  accessKeySecret: '',
   prefix: 'video-learner/',
 } as const;
 
 export interface AppConfig {
   dashscopeApiKey: string;      // 阿里云百炼 / DashScope API Key，用于千问 ASR + 翻译
-  /**
-   * OSS 配置现在是只读的内置常量, 渲染进程仍可以读到(保持老接口形状),
-   * 但无法通过 configSet 修改。
-   */
   oss: {
     region: string;
     bucket: string;
@@ -54,10 +44,11 @@ export interface AppConfig {
   tts?: AppTTSConfig;
 }
 
-type StoredConfig = Omit<AppConfig, 'oss'>;
-
-const defaults: StoredConfig = {
+const defaults: AppConfig = {
   dashscopeApiKey: '',
+  oss: {
+    ...DEFAULT_OSS,
+  },
   translateTarget: '中文',
   tts: {
     model: 'qwen3-tts-flash',
@@ -68,15 +59,23 @@ const defaults: StoredConfig = {
   },
 };
 
-const store = new Store<StoredConfig>({
+const store = new Store<AppConfig>({
   name: 'video-learner-config',
   defaults,
 });
 
 export function getConfig(): AppConfig {
+  const stored = store.store;
+  const storedOss = stored.oss || defaults.oss;
   return {
     dashscopeApiKey: store.get('dashscopeApiKey') || '',
-    oss: { ...HARDCODED_OSS },
+    oss: {
+      region: storedOss.region || DEFAULT_OSS.region,
+      bucket: storedOss.bucket || DEFAULT_OSS.bucket,
+      accessKeyId: storedOss.accessKeyId || '',
+      accessKeySecret: storedOss.accessKeySecret || '',
+      prefix: storedOss.prefix || DEFAULT_OSS.prefix,
+    },
     translateTarget: store.get('translateTarget') || '中文',
     tts: { ...defaults.tts, ...(store.get('tts') || {}) },
   };
@@ -101,7 +100,9 @@ export function setConfig(cfg: Partial<AppConfig>) {
   if (cfg.dashscopeApiKey !== undefined) {
     store.set('dashscopeApiKey', cfg.dashscopeApiKey);
   }
-  // cfg.oss 一律忽略: OSS 参数已经写死在软件里, 不允许前端改。
+  if (cfg.oss) {
+    store.set('oss', { ...current.oss, ...stripUndefined(cfg.oss) });
+  }
   if (cfg.translateTarget !== undefined) {
     store.set('translateTarget', cfg.translateTarget);
   }
@@ -109,6 +110,6 @@ export function setConfig(cfg: Partial<AppConfig>) {
     store.set('tts', { ...current.tts, ...stripUndefined(cfg.tts) });
   }
 
-  // 方便排查: 打一行日志, 看主进程是否真正写入
-  console.log('[config] setConfig done, tts now =', store.get('tts'));
+  console.log('[config] setConfig done');
+  return getConfig();
 }

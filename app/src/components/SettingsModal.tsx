@@ -135,6 +135,75 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           placeholder="中文"
         />
       </div>
+      <div className="field">
+        <label>OSS Region / Endpoint</label>
+        <input
+          value={cfg.oss.region || ''}
+          onChange={(e) =>
+            setCfg({
+              ...cfg,
+              oss: { ...cfg.oss, region: e.target.value },
+            })
+          }
+          placeholder="例如 oss-ap-northeast-1.aliyuncs.com 或 cn-hangzhou"
+        />
+        <span style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+          可填完整 endpoint，也可填 region；程序会自动兼容 `oss-` 前缀。
+        </span>
+      </div>
+      <div className="field">
+        <label>OSS Bucket</label>
+        <input
+          value={cfg.oss.bucket || ''}
+          onChange={(e) =>
+            setCfg({
+              ...cfg,
+              oss: { ...cfg.oss, bucket: e.target.value },
+            })
+          }
+          placeholder="bucket 名称"
+        />
+      </div>
+      <div className="field">
+        <label>OSS AccessKey ID</label>
+        <input
+          value={cfg.oss.accessKeyId || ''}
+          onChange={(e) =>
+            setCfg({
+              ...cfg,
+              oss: { ...cfg.oss, accessKeyId: e.target.value },
+            })
+          }
+          placeholder="LTAI..."
+        />
+      </div>
+      <div className="field">
+        <label>OSS AccessKey Secret</label>
+        <input
+          type="password"
+          value={cfg.oss.accessKeySecret || ''}
+          onChange={(e) =>
+            setCfg({
+              ...cfg,
+              oss: { ...cfg.oss, accessKeySecret: e.target.value },
+            })
+          }
+          placeholder="请输入 OSS AccessKey Secret"
+        />
+      </div>
+      <div className="field">
+        <label>OSS 上传前缀</label>
+        <input
+          value={cfg.oss.prefix || ''}
+          onChange={(e) =>
+            setCfg({
+              ...cfg,
+              oss: { ...cfg.oss, prefix: e.target.value },
+            })
+          }
+          placeholder="video-learner/"
+        />
+      </div>
     </>
   );
 

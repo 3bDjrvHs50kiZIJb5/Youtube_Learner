@@ -6,8 +6,46 @@ import { registerIpcHandlers } from './ipc/register';
 import { cleanupOldOssAudio } from './services/oss';
 
 const isDev = !app.isPackaged;
+const VIDEO_EXT_RE = /\.(mp4|webm|mkv|mov|avi|m4v)$/i;
 
 let mainWindow: BrowserWindow | null = null;
+let pendingOpenFile: string | null = null;
+
+function isVideoFilePath(filePath?: string | null): filePath is string {
+  return !!filePath && VIDEO_EXT_RE.test(filePath) && fs.existsSync(filePath);
+}
+
+function extractVideoPathFromArgv(argv: string[]): string | null {
+  for (const arg of argv) {
+    if (isVideoFilePath(arg)) return arg;
+  }
+  return null;
+}
+
+function focusMainWindow() {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function notifyRendererOpenFile(filePath: string) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  focusMainWindow();
+  if (mainWindow.webContents.isLoadingMainFrame()) {
+    pendingOpenFile = filePath;
+    return;
+  }
+  mainWindow.webContents.send('app:open-file', filePath);
+}
+
+function queuePendingOpenFile(filePath: string) {
+  pendingOpenFile = filePath;
+  focusMainWindow();
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.webContents.isLoadingMainFrame()) return;
+  mainWindow.webContents.send('app:open-file', filePath);
+}
 
 // 注册自定义协议，用于在渲染进程安全地加载本地视频/音频文件
 // 在渲染进程中 <video src="app-media:///绝对路径.webm">
@@ -43,7 +81,27 @@ function createWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    if (pendingOpenFile) notifyRendererOpenFile(pendingOpenFile);
+  });
 }
+
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+}
+
+app.on('second-instance', (_event, argv) => {
+  focusMainWindow();
+  const filePath = extractVideoPathFromArgv(argv);
+  if (filePath) notifyRendererOpenFile(filePath);
+});
+
+app.on('open-file', (event, filePath) => {
+  event.preventDefault();
+  if (isVideoFilePath(filePath)) queuePendingOpenFile(filePath);
+});
 
 app.whenReady().then(() => {
   // 处理 app-media:// 协议，拿到后面的绝对路径直接读文件
@@ -118,7 +176,15 @@ app.whenReady().then(() => {
   });
 
   registerIpcHandlers(ipcMain);
+  ipcMain.handle('app:consume-pending-open-file', async () => {
+    const filePath = pendingOpenFile;
+    pendingOpenFile = null;
+    return filePath;
+  });
   createWindow();
+
+  const launchFilePath = extractVideoPathFromArgv(process.argv.slice(1));
+  if (launchFilePath) queuePendingOpenFile(launchFilePath);
 
   // 启动后异步清理 OSS 上 7 天前的旧音频, 失败不影响应用启动
   // 延迟 3 秒执行, 避免和窗口初始化抢网络资源

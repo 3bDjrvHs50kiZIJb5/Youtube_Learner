@@ -17,7 +17,9 @@ function randomId(n = 8): string {
 function buildClientOptions() {
   const { oss } = getConfig();
   if (!oss.accessKeyId || !oss.accessKeySecret || !oss.bucket) {
-    throw new Error('请先在「设置」里配置阿里云 OSS(region / bucket / accessKey)');
+    throw new Error(
+      'OSS 配置不完整：当前 bucket/region 可内置，但必须提供 OSS_ACCESS_KEY_ID 和 OSS_ACCESS_KEY_SECRET（或 ALIBABA_CLOUD_ACCESS_KEY_ID / ALIBABA_CLOUD_ACCESS_KEY_SECRET）'
+    );
   }
   const raw = (oss.region || '').trim();
   if (!raw) throw new Error('OSS region 未配置');

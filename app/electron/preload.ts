@@ -47,6 +47,7 @@ const api = {
 
   // 文件系统
   fileExists: (p: string) => ipcRenderer.invoke('fs:exists', p),
+  consumePendingOpenFile: () => ipcRenderer.invoke('app:consume-pending-open-file'),
 
   // 字幕
   loadSubtitle: (subtitlePath: string) => ipcRenderer.invoke('subtitle:load', subtitlePath),
@@ -85,6 +86,11 @@ const api = {
     const listener = (_: unknown, phase: 'asr' | 'translate') => cb(phase);
     ipcRenderer.on('pipeline:reset-workers', listener);
     return () => ipcRenderer.removeListener('pipeline:reset-workers', listener);
+  },
+  onOpenVideoFile: (cb: (absolutePath: string) => void) => {
+    const listener = (_: unknown, absolutePath: string) => cb(absolutePath);
+    ipcRenderer.on('app:open-file', listener);
+    return () => ipcRenderer.removeListener('app:open-file', listener);
   },
 };
 
