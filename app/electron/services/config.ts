@@ -17,14 +17,35 @@ export interface AppTTSConfig {
   speed?: number;
 }
 
+function readEnv(name: string): string {
+  return (process.env[name] || '').trim();
+}
+
+/**
+ * OSS 的 bucket / region 可以内置, 但敏感的 AK/SK 必须走环境变量,
+ * 避免把密钥提交进仓库。
+ */
+const HARDCODED_OSS = {
+  region: 'oss-ap-northeast-1.aliyuncs.com',
+  bucket: 'youtube-videos-1982',
+  accessKeyId:
+    readEnv('OSS_ACCESS_KEY_ID') || readEnv('ALIBABA_CLOUD_ACCESS_KEY_ID'),
+  accessKeySecret:
+    readEnv('OSS_ACCESS_KEY_SECRET') || readEnv('ALIBABA_CLOUD_ACCESS_KEY_SECRET'),
+  prefix: 'video-learner/',
+} as const;
+
 export interface AppConfig {
   dashscopeApiKey: string;      // 阿里云百炼 / DashScope API Key，用于千问 ASR + 翻译
+  /**
+   * OSS 配置现在是只读的内置常量, 渲染进程仍可以读到(保持老接口形状),
+   * 但无法通过 configSet 修改。
+   */
   oss: {
-    region: string;             // 如 oss-cn-hangzhou
+    region: string;
     bucket: string;
     accessKeyId: string;
     accessKeySecret: string;
-    /** OSS 文件存储目录前缀，默认 video-learner/ */
     prefix?: string;
   };
   /** 字幕默认翻译目标语言 */
@@ -33,15 +54,10 @@ export interface AppConfig {
   tts?: AppTTSConfig;
 }
 
-const defaults: AppConfig = {
+type StoredConfig = Omit<AppConfig, 'oss'>;
+
+const defaults: StoredConfig = {
   dashscopeApiKey: '',
-  oss: {
-    region: 'oss-cn-hangzhou',
-    bucket: '',
-    accessKeyId: '',
-    accessKeySecret: '',
-    prefix: 'video-learner/',
-  },
   translateTarget: '中文',
   tts: {
     model: 'qwen3-tts-flash',
@@ -52,7 +68,7 @@ const defaults: AppConfig = {
   },
 };
 
-const store = new Store<AppConfig>({
+const store = new Store<StoredConfig>({
   name: 'video-learner-config',
   defaults,
 });
@@ -60,7 +76,7 @@ const store = new Store<AppConfig>({
 export function getConfig(): AppConfig {
   return {
     dashscopeApiKey: store.get('dashscopeApiKey') || '',
-    oss: store.get('oss') || defaults.oss,
+    oss: { ...HARDCODED_OSS },
     translateTarget: store.get('translateTarget') || '中文',
     tts: { ...defaults.tts, ...(store.get('tts') || {}) },
   };
@@ -85,9 +101,7 @@ export function setConfig(cfg: Partial<AppConfig>) {
   if (cfg.dashscopeApiKey !== undefined) {
     store.set('dashscopeApiKey', cfg.dashscopeApiKey);
   }
-  if (cfg.oss) {
-    store.set('oss', { ...current.oss, ...stripUndefined(cfg.oss) });
-  }
+  // cfg.oss 一律忽略: OSS 参数已经写死在软件里, 不允许前端改。
   if (cfg.translateTarget !== undefined) {
     store.set('translateTarget', cfg.translateTarget);
   }

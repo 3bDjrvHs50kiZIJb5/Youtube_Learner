@@ -67,13 +67,22 @@ function cleanupSegments(dirs: string[]) {
 // 作为固定像素的 extraSize, 不参与比例计算。拖拽缩放时也继续保持该比例。
 //
 // 设: ratio = videoW / videoH, extraW = 侧栏宽, extraH = 顶栏 + 控制条高
-//     contentW = outerW - extraW, contentH = outerH - extraH
-//     约束: contentW / contentH = ratio
+//     videoAreaW = webContentW - extraW, videoAreaH = webContentH - extraH
+//     约束: videoAreaW / videoAreaH = ratio
 //
 // 策略:
-//  - 以当前 contentW 为起点反推 contentH, 如果总高超过屏幕, 就用最大高反推宽。
+//  - 以当前内容区宽度为起点反推高度, 如果总高超过屏幕, 就用最大高反推宽。
 //  - 位置尽量保持左上角, 超出工作区就推回来。
 //  - 最大化/全屏状态下 setBounds 无效, 先退出再改。
+//
+// 重要: 全程用 getContentBounds/setContentBounds 而不是 getBounds/setBounds。
+//   - macOS 原生窗口有 ~28px 标题栏在外窗口里、但不在 web 内容里。
+//   - 前端测量 extraHeight 是 DOM 元素 (topbar + controls), 不含系统标题栏。
+//   - setBounds 操作的是外窗口尺寸, 直接把 extra + 视频区当成外窗口高度会
+//     少算一个标题栏高度, 第一次打开视频比例就是扁的;
+//     而 setAspectRatio 在 macOS 上作用于内容区 (NSWindow.setContentAspectRatio:),
+//     手动缩放时才会把比例矫正回来 —— 这正是 bug 现象。
+//   - 用 setContentBounds 之后, 初始重置和后续缩放约束都基于同一个内容区坐标系。
 function applyVideoAspectRatio(
   win: BrowserWindow,
   ratio: number,
@@ -88,54 +97,71 @@ function applyVideoAspectRatio(
   const display = screen.getDisplayMatching(win.getBounds());
   const workArea = display.workArea;
 
-  const [curW, curH] = win.getSize();
-  const [curX, curY] = win.getPosition();
+  const contentBounds = win.getContentBounds();
+  const { x: curX, y: curY, width: curContentW, height: curContentH } = contentBounds;
 
-  const maxOuterW = Math.floor(workArea.width * 0.95);
-  const maxOuterH = Math.floor(workArea.height * 0.95);
+  // 外窗口与内容区的高度/宽度差 (macOS 上主要是原生标题栏高度)
+  const outerBounds = win.getBounds();
+  const frameWidth = outerBounds.width - curContentW;
+  const frameHeight = outerBounds.height - curContentH;
 
-  // 先算内容区可用最大值
-  const maxContentW = Math.max(1, maxOuterW - extraWidth);
-  const maxContentH = Math.max(1, maxOuterH - extraHeight);
+  // 内容区可用的最大尺寸 (把工作区的 95% 扣掉系统 frame)
+  const maxContentW = Math.max(1, Math.floor(workArea.width * 0.95) - frameWidth);
+  const maxContentH = Math.max(1, Math.floor(workArea.height * 0.95) - frameHeight);
 
-  // 起点: 当前窗口对应的内容区宽度, 再按比例反推高度
-  let contentW = Math.max(1, Math.min(curW - extraWidth, maxContentW));
-  let contentH = Math.round(contentW / ratio);
+  // 视频区可用最大值 = 内容区最大值 - 前端测量的 chrome
+  const maxVideoW = Math.max(1, maxContentW - extraWidth);
+  const maxVideoH = Math.max(1, maxContentH - extraHeight);
 
-  if (contentH > maxContentH) {
-    contentH = maxContentH;
-    contentW = Math.round(contentH * ratio);
+  // 起点: 当前内容区宽度里视频区占的部分, 再按比例反推视频高度
+  let videoW = Math.max(1, Math.min(curContentW - extraWidth, maxVideoW));
+  let videoH = Math.round(videoW / ratio);
+
+  if (videoH > maxVideoH) {
+    videoH = maxVideoH;
+    videoW = Math.round(videoH * ratio);
   }
-  if (contentW > maxContentW) {
-    contentW = maxContentW;
-    contentH = Math.round(contentW / ratio);
+  if (videoW > maxVideoW) {
+    videoW = maxVideoW;
+    videoH = Math.round(videoW / ratio);
   }
 
   // 最小尺寸兜底: 保证视频区至少有 480x270 的显示空间
-  const MIN_CONTENT_W = 480;
-  const MIN_CONTENT_H = 270;
-  if (contentW < MIN_CONTENT_W) {
-    contentW = MIN_CONTENT_W;
-    contentH = Math.round(contentW / ratio);
+  const MIN_VIDEO_W = 480;
+  const MIN_VIDEO_H = 270;
+  if (videoW < MIN_VIDEO_W) {
+    videoW = MIN_VIDEO_W;
+    videoH = Math.round(videoW / ratio);
   }
-  if (contentH < MIN_CONTENT_H) {
-    contentH = MIN_CONTENT_H;
-    contentW = Math.round(contentH * ratio);
+  if (videoH < MIN_VIDEO_H) {
+    videoH = MIN_VIDEO_H;
+    videoW = Math.round(videoH * ratio);
   }
 
-  const newW = contentW + extraWidth;
-  const newH = contentH + extraHeight;
+  const newContentW = videoW + extraWidth;
+  const newContentH = videoH + extraHeight;
 
-  let newX = curX;
-  let newY = curY;
-  if (newX + newW > workArea.x + workArea.width) newX = workArea.x + workArea.width - newW;
-  if (newY + newH > workArea.y + workArea.height) newY = workArea.y + workArea.height - newH;
-  if (newX < workArea.x) newX = workArea.x;
-  if (newY < workArea.y) newY = workArea.y;
+  // 位置基于外窗口校正: 把外窗口推回工作区内, 再回推到内容区 x/y
+  const newOuterW = newContentW + frameWidth;
+  const newOuterH = newContentH + frameHeight;
+  const outerX = outerBounds.x;
+  const outerY = outerBounds.y;
+  let newOuterX = outerX;
+  let newOuterY = outerY;
+  if (newOuterX + newOuterW > workArea.x + workArea.width) {
+    newOuterX = workArea.x + workArea.width - newOuterW;
+  }
+  if (newOuterY + newOuterH > workArea.y + workArea.height) {
+    newOuterY = workArea.y + workArea.height - newOuterH;
+  }
+  if (newOuterX < workArea.x) newOuterX = workArea.x;
+  if (newOuterY < workArea.y) newOuterY = workArea.y;
+  const newX = curX + (newOuterX - outerX);
+  const newY = curY + (newOuterY - outerY);
 
-  win.setBounds({ x: newX, y: newY, width: newW, height: newH }, true);
+  win.setContentBounds({ x: newX, y: newY, width: newContentW, height: newContentH }, true);
   // 锁定后续手动拖拽缩放也保持"视频区"比例
-  // macOS 支持 extraSize, Chromium 内部会在比例约束时先减去它;
+  // macOS 上 setAspectRatio 作用在内容区, extraSize 与上面的 content 尺寸是同一坐标系。
   // 其他平台 extraSize 被忽略, 但主流开发机是 macOS, 先满足这个场景。
   win.setAspectRatio(ratio, { width: extraWidth, height: extraHeight });
 }

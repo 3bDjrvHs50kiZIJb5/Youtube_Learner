@@ -33,6 +33,7 @@ export interface PlayerState {
   mediaUrl: string | null;
   cues: SubtitleCue[];
   activeCueId: number | null;
+  editingCueId: number | null;
 
   showEnglish: boolean;
   showTranslation: boolean;
@@ -55,9 +56,19 @@ export interface PlayerState {
   setInitialSeek: (ms: number | null) => void;
   setCues: (cues: SubtitleCue[]) => void;
   updateCueTranslation: (cueId: number, translation: string) => void;
-  /** 编辑字幕文本与译文(未传的字段保持不变) */
-  updateCue: (cueId: number, patch: { text?: string; translation?: string }) => void;
+  /** 编辑字幕字段(未传的字段保持不变) */
+  updateCue: (
+    cueId: number,
+    patch: {
+      text?: string;
+      translation?: string;
+      startMs?: number;
+      endMs?: number;
+      words?: SubtitleCue['words'];
+    }
+  ) => void;
   setActiveCue: (id: number | null) => void;
+  setEditingCue: (id: number | null) => void;
   toggleEnglish: () => void;
   toggleTranslation: () => void;
   setLoop: (cueId: number | null, times?: number) => void;
@@ -88,6 +99,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   mediaUrl: null,
   cues: [],
   activeCueId: null,
+  editingCueId: null,
   showEnglish: true,
   showTranslation: true,
   loopCueId: null,
@@ -106,6 +118,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
       mediaUrl,
       cues: [],
       activeCueId: null,
+      editingCueId: null,
       steps: { ...initialSteps },
       segments: [],
       uploaded: [],
@@ -118,16 +131,113 @@ export const usePlayerStore = create<PlayerState>((set) => ({
       cues: s.cues.map((c) => (c.id === cueId ? { ...c, translation } : c)),
     })),
   updateCue: (cueId, patch) =>
-    set((s) => ({
-      cues: s.cues.map((c) => {
-        if (c.id !== cueId) return c;
-        const next = { ...c };
-        if (patch.text !== undefined) next.text = patch.text;
-        if (patch.translation !== undefined) next.translation = patch.translation;
-        return next;
-      }),
-    })),
+    set((s) => {
+      const index = s.cues.findIndex((c) => c.id === cueId);
+      if (index === -1) return s;
+
+      const nextStartMs = patch.startMs ?? s.cues[index].startMs;
+      const nextEndMs = patch.endMs ?? s.cues[index].endMs;
+      if (nextEndMs <= nextStartMs) return s;
+
+      const remapWords = (
+        words: typeof s.cues[number]['words'],
+        oldStart: number,
+        oldEnd: number,
+        newStart: number,
+        newEnd: number
+      ) => {
+        if (!words || !words.length) return words;
+        const oldSpan = oldEnd - oldStart;
+        if (oldSpan <= 0) {
+          const delta = newStart - oldStart;
+          return words.map((w) => ({ ...w, startMs: w.startMs + delta, endMs: w.endMs + delta }));
+        }
+        const scale = (newEnd - newStart) / oldSpan;
+        return words.map((w) => ({
+          ...w,
+          startMs: Math.round(newStart + (w.startMs - oldStart) * scale),
+          endMs: Math.round(newStart + (w.endMs - oldStart) * scale),
+        }));
+      };
+
+      const cues = s.cues.map((cue) => ({ ...cue }));
+
+      const applyRange = (cueIndex: number, newStart: number, newEnd: number) => {
+        const cue = cues[cueIndex];
+        if (!cue) return;
+        if (cue.startMs === newStart && cue.endMs === newEnd) return;
+        cues[cueIndex] = {
+          ...cue,
+          startMs: newStart,
+          endMs: newEnd,
+          words: remapWords(cue.words, cue.startMs, cue.endMs, newStart, newEnd),
+        };
+      };
+
+      const repairBackward = (cueIndex: number, boundaryEnd: number) => {
+        if (cueIndex < 0) return;
+        const cue = cues[cueIndex];
+        if (!cue) return;
+
+        let newStart = cue.startMs;
+        const newEnd = boundaryEnd;
+
+        if (newEnd <= newStart) {
+          const duration = Math.max(1, cue.endMs - cue.startMs);
+          newStart = Math.max(0, newEnd - duration);
+        }
+
+        applyRange(cueIndex, newStart, newEnd);
+
+        if (newStart !== cue.startMs) {
+          repairBackward(cueIndex - 1, newStart);
+        }
+      };
+
+      const repairForward = (cueIndex: number, boundaryStart: number) => {
+        if (cueIndex >= cues.length) return;
+        const cue = cues[cueIndex];
+        if (!cue) return;
+
+        const newStart = boundaryStart;
+        let newEnd = cue.endMs;
+
+        if (newStart >= newEnd) {
+          const duration = Math.max(1, cue.endMs - cue.startMs);
+          newEnd = newStart + duration;
+        }
+
+        applyRange(cueIndex, newStart, newEnd);
+
+        if (newEnd !== cue.endMs) {
+          repairForward(cueIndex + 1, newEnd);
+        }
+      };
+
+      const current = cues[index];
+      cues[index] = {
+        ...current,
+        startMs: nextStartMs,
+        endMs: nextEndMs,
+        text: patch.text ?? current.text,
+        translation: patch.translation ?? current.translation,
+        words:
+          patch.words !== undefined
+            ? patch.words
+            : remapWords(current.words, current.startMs, current.endMs, nextStartMs, nextEndMs),
+      };
+
+      if (patch.startMs !== undefined) {
+        repairBackward(index - 1, nextStartMs);
+      }
+      if (patch.endMs !== undefined) {
+        repairForward(index + 1, nextEndMs);
+      }
+
+      return { cues };
+    }),
   setActiveCue: (id) => set({ activeCueId: id }),
+  setEditingCue: (id) => set({ editingCueId: id }),
   toggleEnglish: () => set((s) => ({ showEnglish: !s.showEnglish })),
   toggleTranslation: () => set((s) => ({ showTranslation: !s.showTranslation })),
   setLoop: (cueId, times = -1) => set({ loopCueId: cueId, loopRemaining: times }),

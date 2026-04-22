@@ -3,6 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { Readable } from 'node:stream';
 import { registerIpcHandlers } from './ipc/register';
+import { cleanupOldOssAudio } from './services/oss';
 
 const isDev = !app.isPackaged;
 
@@ -118,6 +119,14 @@ app.whenReady().then(() => {
 
   registerIpcHandlers(ipcMain);
   createWindow();
+
+  // 启动后异步清理 OSS 上 7 天前的旧音频, 失败不影响应用启动
+  // 延迟 3 秒执行, 避免和窗口初始化抢网络资源
+  setTimeout(() => {
+    cleanupOldOssAudio(7).catch((err) => {
+      console.warn('[main] OSS 清理任务异常:', err);
+    });
+  }, 3000);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

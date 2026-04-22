@@ -552,6 +552,38 @@ input:focus, textarea:focus { border-color: var(--primary); }
   margin-top: 4px;
 }
 
+.cue-edit-time-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+.cue-edit-time-label {
+  font-size: 11px;
+  color: var(--muted);
+  width: 28px;
+  flex: none;
+}
+.cue-edit-time-input {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  padding: 4px 6px;
+  width: 100px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.cue-edit-time-input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+.cue-edit-time-row button {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
 .word-list { padding: 8px; }
 .word-toolbar {
   display: flex;
@@ -767,16 +799,22 @@ input:focus, textarea:focus { border-color: var(--primary); }
 
 .toast {
   position: fixed;
-  bottom: 20px;
+  top: 50%;
   left: 50%;
-  transform: translateX(-50%);
-  background: var(--panel-2);
+  transform: translate(-50%, -50%);
+  background: rgba(20, 20, 20, 0.88);
+  color: #fff;
   border: 1px solid var(--border);
-  padding: 10px 16px;
-  border-radius: 6px;
-  font-size: 13px;
+  padding: 20px 28px;
+  border-radius: 10px;
+  font-size: 18px;
+  line-height: 1.5;
+  font-weight: 500;
+  text-align: center;
   z-index: 200;
-  max-width: 480px;
+  max-width: 640px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
 }
 
 .word-popover {

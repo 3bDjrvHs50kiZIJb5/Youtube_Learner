@@ -82,12 +82,11 @@ const TTS_LANGS: Array<{ value: string; label: string }> = [
   { value: 'es', label: '西班牙语' },
 ];
 
-type TabKey = 'general' | 'oss' | 'tts';
+type TabKey = 'general' | 'tts';
 
 const TABS: Array<{ key: TabKey; label: string }> = [
-  { key: 'general', label: '基础' },
-  { key: 'oss', label: 'OSS 存储' },
-  { key: 'tts', label: '朗读 TTS' },
+  { key: 'general', label: 'ASR' },
+  { key: 'tts', label: 'TTS' },
 ];
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
@@ -134,54 +133,6 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           value={cfg.translateTarget || ''}
           onChange={(e) => setCfg({ ...cfg, translateTarget: e.target.value })}
           placeholder="中文"
-        />
-      </div>
-    </>
-  );
-
-  const renderOss = () => (
-    <>
-      <div className="field">
-        <label>
-          Region（如 <code>oss-cn-hangzhou</code>、<code>cn-hangzhou</code>，或完整 endpoint）
-        </label>
-        <input
-          value={cfg.oss.region}
-          onChange={(e) => setCfg({ ...cfg, oss: { ...cfg.oss, region: e.target.value } })}
-          placeholder="oss-cn-hangzhou"
-        />
-        <span style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
-          阿里云控制台「概览 → Region」显示的是 <code>cn-hangzhou</code>，会自动补 <code>oss-</code> 前缀。
-        </span>
-      </div>
-      <div className="field">
-        <label>Bucket</label>
-        <input
-          value={cfg.oss.bucket}
-          onChange={(e) => setCfg({ ...cfg, oss: { ...cfg.oss, bucket: e.target.value } })}
-        />
-      </div>
-      <div className="field">
-        <label>AccessKey ID</label>
-        <input
-          value={cfg.oss.accessKeyId}
-          onChange={(e) => setCfg({ ...cfg, oss: { ...cfg.oss, accessKeyId: e.target.value } })}
-        />
-      </div>
-      <div className="field">
-        <label>AccessKey Secret</label>
-        <input
-          type="password"
-          value={cfg.oss.accessKeySecret}
-          onChange={(e) => setCfg({ ...cfg, oss: { ...cfg.oss, accessKeySecret: e.target.value } })}
-        />
-      </div>
-      <div className="field">
-        <label>对象前缀</label>
-        <input
-          value={cfg.oss.prefix || ''}
-          onChange={(e) => setCfg({ ...cfg, oss: { ...cfg.oss, prefix: e.target.value } })}
-          placeholder="video-learner/"
         />
       </div>
     </>
@@ -300,7 +251,6 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
 
         <div className="settings-body">
           {tab === 'general' && renderGeneral()}
-          {tab === 'oss' && renderOss()}
           {tab === 'tts' && renderTts()}
         </div>
 

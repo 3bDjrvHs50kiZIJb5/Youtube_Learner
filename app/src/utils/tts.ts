@@ -98,6 +98,8 @@ export interface SpeakOptions {
   speed?: number;
   /** 语种提示,默认 'en' */
   language?: string;
+  /** 开始朗读前是否自动暂停视频,默认 true */
+  pauseVideo?: boolean;
   /** 播放真正结束(ended/error)时的回调,用来给 UI 清理 loading 状态 */
   onDone?: () => void;
 }
@@ -118,12 +120,14 @@ export async function speakViaTTS(
 
   stopCurrent();
 
-  // 任何 TTS 开始前都通知 Player 暂停视频,避免原声和合成语音同时响。
-  // 用自定义事件解耦,不直接依赖 videoRef。
-  try {
-    window.dispatchEvent(new Event('pauseVideo'));
-  } catch {
-    // 非浏览器环境忽略
+  // 默认在 TTS 前暂停视频,避免原声和合成语音同时响;
+  // 但某些轻量场景(比如点词弹层)只想发音,不希望打断播放。
+  if (opts.pauseVideo !== false) {
+    try {
+      window.dispatchEvent(new Event('pauseVideo'));
+    } catch {
+      // 非浏览器环境忽略
+    }
   }
 
   const speed = Math.min(2.0, Math.max(0.5, opts.speed ?? 1.0));

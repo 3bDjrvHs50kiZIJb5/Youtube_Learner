@@ -30,6 +30,7 @@ export function Player({ onAddWord, onDropVideo }: Props) {
     videoPath,
     cues,
     activeCueId,
+    editingCueId,
     setActiveCue,
     loopCueId,
     decLoop,
@@ -43,19 +44,29 @@ export function Player({ onAddWord, onDropVideo }: Props) {
   // 当前排好的"到句末"定时器 id, 跨 effect 重建保留
   const schedRef = useRef<{ endTimer: number | null }>({ endTimer: null });
 
+  // 字幕编辑"试听"期间置位:
+  // 用来压制 精读(autoPauseAtSentenceEnd) / 复读(loopCueId) 的句末钩子,
+  // 保证试听严格按"编辑后的起止点"播一次,不会在原始 cue.endMs 就被拦截掉。
+  const previewActiveRef = useRef(false);
+
   // 只负责根据 currentTime 更新 activeCueId,给字幕 overlay 和调度器当"换句"信号
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
     const onTime = () => {
-      const ms = v.currentTime * 1000;
-      const cur = cues.find((c) => ms >= c.startMs && ms < c.endMs);
-      const curId = cur?.id ?? null;
+      const curId =
+        editingCueId ??
+        (() => {
+          const ms = v.currentTime * 1000;
+          const cur = cues.find((c) => ms >= c.startMs && ms < c.endMs);
+          return cur?.id ?? null;
+        })();
       if (curId !== activeCueId) setActiveCue(curId);
     };
+    onTime();
     v.addEventListener('timeupdate', onTime);
     return () => v.removeEventListener('timeupdate', onTime);
-  }, [cues, activeCueId, setActiveCue]);
+  }, [cues, activeCueId, editingCueId, setActiveCue]);
 
   // 句末预约调度:
   // 不再等"越过 endMs 才反应"(timeupdate 粒度 250ms / rAF 也至少差 1 帧,
@@ -117,6 +128,8 @@ export function Player({ onAddWord, onDropVideo }: Props) {
     const schedule = () => {
       clearTimer();
       if (v.paused) return;
+      // 试听中: 不排句末钩子, 交给 previewCueRange 自己的定时器按编辑后的 endMs 暂停
+      if (previewActiveRef.current) return;
       const needHook = autoPauseAtSentenceEnd || loopCueId !== null;
       if (!needHook) return;
 
@@ -351,7 +364,19 @@ export function Player({ onAddWord, onDropVideo }: Props) {
     const handler = (e: Event) => {
       const v = videoRef.current;
       if (!v) return;
-      const detail = (e as CustomEvent).detail as { startMs: number; play?: boolean };
+      const detail = (e as CustomEvent).detail as {
+        startMs: number;
+        play?: boolean;
+        fromCueList?: boolean;
+        enableAutoPause?: boolean;
+      };
+      // 从右侧字幕列表点选跳转时,按这次点击的句长决定是否切到精读:
+      // 长句(>=10 词)自动句末暂停,短句则保持连续播放。
+      if (detail.fromCueList) {
+        const { autoPauseAtSentenceEnd: cur, toggleAutoPause } = usePlayerStore.getState();
+        const shouldEnable = detail.enableAutoPause ?? true;
+        if (cur !== shouldEnable) toggleAutoPause();
+      }
       v.currentTime = detail.startMs / 1000;
       // play() 在没有 src / 被自动播放策略拦截时会 reject,吞掉防止未捕获 Promise
       if (detail.play) v.play().catch(() => {});
@@ -368,6 +393,62 @@ export function Player({ onAddWord, onDropVideo }: Props) {
     };
     window.addEventListener('pauseVideo', handler);
     return () => window.removeEventListener('pauseVideo', handler);
+  }, []);
+
+  // 字幕时间微调的"试听"能力:从 startMs 播到 endMs 后自动暂停。
+  // 区别于 seekToCue(只跳转不限终点) / 复读(到末尾再倒带),这里是"一次性播一段"。
+  //
+  // 注意: 试听期间通过 previewActiveRef 压制上面的句末钩子, 否则如果用户
+  // 开着精读/复读, 视频一到原始 cue.endMs 就会被截停/倒回, 没法验证新的起止点。
+  useEffect(() => {
+    let timer: number | null = null;
+    const clearTimer = () => {
+      if (timer !== null) {
+        window.clearTimeout(timer);
+        timer = null;
+      }
+    };
+    const endPreview = () => {
+      previewActiveRef.current = false;
+      const sched = schedRef.current;
+      if (sched.endTimer !== null) {
+        window.clearTimeout(sched.endTimer);
+        sched.endTimer = null;
+      }
+    };
+    const handler = (e: Event) => {
+      const v = videoRef.current;
+      if (!v) return;
+      const { startMs, endMs } = (e as CustomEvent).detail as {
+        startMs: number;
+        endMs: number;
+      };
+      if (!isFinite(startMs) || !isFinite(endMs) || endMs <= startMs) return;
+      clearTimer();
+      previewActiveRef.current = true;
+      const sched = schedRef.current;
+      if (sched.endTimer !== null) {
+        window.clearTimeout(sched.endTimer);
+        sched.endTimer = null;
+      }
+      v.currentTime = startMs / 1000;
+      v.play().catch(() => {});
+      const rate = v.playbackRate || 1;
+      // +30ms 余量,减少因为 setTimeout 抖动导致的末尾一点被截掉
+      const waitMs = (endMs - startMs) / rate + 30;
+      timer = window.setTimeout(() => {
+        timer = null;
+        const cur = videoRef.current;
+        if (cur && !cur.paused) cur.pause();
+        endPreview();
+      }, waitMs);
+    };
+    window.addEventListener('previewCueRange', handler as EventListener);
+    return () => {
+      clearTimer();
+      endPreview();
+      window.removeEventListener('previewCueRange', handler as EventListener);
+    };
   }, []);
 
   // 拖拽处理:允许把视频文件直接拖进播放区打开

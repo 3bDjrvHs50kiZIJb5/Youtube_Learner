@@ -177,8 +177,6 @@ export function SubtitleOverlay({ onAddWord }: Props) {
     setSpeaking(false);
   }, [cur?.id]);
 
-  if (!cur) return null;
-
   const handleSpeakCue = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!cur?.text) return;
@@ -204,53 +202,60 @@ export function SubtitleOverlay({ onAddWord }: Props) {
       x: rect.left + rect.width / 2,
       y: rect.top,
     });
+    // 弹出单词面板时顺手朗读当前词,和生词本中的单词朗读保持一致: 固定 1.0 倍速。
+    void speakViaTTS(cleanWord, {
+      speed: 1.0,
+      language: 'en',
+    });
   };
 
 
   return (
     <>
-      <div className="subtitle-overlay" onClick={() => setPopover(null)}>
-        {showEnglish && (
-          <div className="subtitle-en-wrap">
-            <div className="line en">
-              {cur.words && cur.words.length > 0 ? (
-                <KaraokeLine
-                  words={cur.words}
-                  onWordClick={(w, e) => handleWordClick(w, cur.id, e)}
-                />
-              ) : (
-                // 没有字级时间戳(老字幕),走原始 fallback 渲染
-                tokenizeFallback(cur.text).map((t, i) =>
-                  t.isWord ? (
-                    <span
-                      key={i}
-                      className="word"
-                      onClick={(e) => handleWordClick(t.token, cur.id, e)}
-                    >
-                      {t.token}
-                    </span>
-                  ) : (
-                    <span key={i}>{t.token}</span>
+      {cur && (
+        <div className="subtitle-overlay" onClick={() => setPopover(null)}>
+          {showEnglish && (
+            <div className="subtitle-en-wrap">
+              <div className="line en">
+                {cur.words && cur.words.length > 0 ? (
+                  <KaraokeLine
+                    words={cur.words}
+                    onWordClick={(w, e) => handleWordClick(w, cur.id, e)}
+                  />
+                ) : (
+                  // 没有字级时间戳(老字幕),走原始 fallback 渲染
+                  tokenizeFallback(cur.text).map((t, i) =>
+                    t.isWord ? (
+                      <span
+                        key={i}
+                        className="word"
+                        onClick={(e) => handleWordClick(t.token, cur.id, e)}
+                      >
+                        {t.token}
+                      </span>
+                    ) : (
+                      <span key={i}>{t.token}</span>
+                    )
                   )
-                )
-              )}
+                )}
+              </div>
+              <button
+                className="ghost icon-btn subtitle-speak-btn"
+                title="朗读当前字幕 (Qwen-TTS)"
+                onClick={handleSpeakCue}
+                disabled={speaking}
+              >
+                {speaking ? '⏳' : '🔊'}
+              </button>
             </div>
-            <button
-              className="ghost icon-btn subtitle-speak-btn"
-              title="朗读当前字幕 (Qwen-TTS)"
-              onClick={handleSpeakCue}
-              disabled={speaking}
-            >
-              {speaking ? '⏳' : '🔊'}
-            </button>
-          </div>
-        )}
-        {showTranslation && cur.translation && (
-          <div>
-            <div className="line zh">{cur.translation}</div>
-          </div>
-        )}
-      </div>
+          )}
+          {showTranslation && cur.translation && (
+            <div>
+              <div className="line zh">{cur.translation}</div>
+            </div>
+          )}
+        </div>
+      )}
 
       {popover && (
         <div
