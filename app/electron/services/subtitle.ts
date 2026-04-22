@@ -252,3 +252,74 @@ export async function translateCues(
 
   return result;
 }
+
+export interface WordExplanation {
+  word: string;
+  phonetic?: string;
+  pos?: string;
+  meaning?: string;
+  contextual?: string;
+}
+
+/**
+ * 用 qwen-turbo 给一个单词做"词典式"解释。
+ * 传入原始单词 + 所在句子,返回音标 / 词性 / 中文释义 / 结合上下文的中文含义。
+ * 失败时 throw,调用方自行处理。
+ */
+export async function explainWord(
+  word: string,
+  context: string
+): Promise<WordExplanation> {
+  const apiKey = getConfig().dashscopeApiKey;
+  if (!apiKey) throw new Error('未配置 DashScope API Key,无法解释单词');
+  const cleanWord = word.trim();
+  if (!cleanWord) throw new Error('单词为空');
+
+  const prompt =
+    `你是一个英语词典助手。给出下面英文单词的解释,严格只返回 JSON,不要任何多余文字、不要代码块。\n` +
+    `字段要求:\n` +
+    `- phonetic: 国际音标(例如 /ˈæp.əl/),若不确定可留空字符串\n` +
+    `- pos: 词性缩写(n./v./adj./adv./prep. 等)\n` +
+    `- meaning: 该单词最常用的中文释义,尽量简短,多个义项用;分隔\n` +
+    `- contextual: 在给定上下文中该单词的中文含义,一句话\n\n` +
+    `单词: ${cleanWord}\n` +
+    `上下文: ${context || '(无)'}\n\n` +
+    `输出示例: {"phonetic":"/ˈæp.əl/","pos":"n.","meaning":"苹果","contextual":"这里指一种水果"}`;
+
+  const { data } = await axios.post(
+    'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+    {
+      model: 'qwen-turbo',
+      messages: [
+        { role: 'system', content: '你是一个专业的英语词典助手,只返回 JSON。' },
+        { role: 'user', content: prompt },
+      ],
+      temperature: 0.2,
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+
+  const content: string = data?.choices?.[0]?.message?.content || '';
+  // 兼容模型偶尔包了代码块 / 前后缀的情况,抓出第一个 { ... } 再解析
+  const jsonMatch = content.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    return { word: cleanWord, meaning: content.trim() };
+  }
+  try {
+    const parsed = JSON.parse(jsonMatch[0]) as Partial<WordExplanation>;
+    return {
+      word: cleanWord,
+      phonetic: parsed.phonetic?.trim() || undefined,
+      pos: parsed.pos?.trim() || undefined,
+      meaning: parsed.meaning?.trim() || undefined,
+      contextual: parsed.contextual?.trim() || undefined,
+    };
+  } catch {
+    return { word: cleanWord, meaning: content.trim() };
+  }
+}

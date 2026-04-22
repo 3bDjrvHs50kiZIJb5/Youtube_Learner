@@ -12,6 +12,11 @@ export interface WordEntry {
   sentenceEndMs?: number;
   note?: string;
   createdAt?: number;
+  /** 以下字段来自 AI 解释,允许事后补全 */
+  phonetic?: string;
+  pos?: string;
+  meaning?: string;
+  contextual?: string;
 }
 
 interface DbData {
@@ -64,4 +69,15 @@ export function deleteWord(id: number): void {
   const d = ensureLoaded();
   d.words = d.words.filter((w) => w.id !== id);
   flush();
+}
+
+export function updateWord(id: number, patch: Partial<WordEntry>): WordEntry | null {
+  const d = ensureLoaded();
+  const idx = d.words.findIndex((w) => w.id === id);
+  if (idx < 0) return null;
+  // id/createdAt 不允许被覆盖,其它字段浅合并
+  const merged: WordEntry = { ...d.words[idx], ...patch, id: d.words[idx].id, createdAt: d.words[idx].createdAt };
+  d.words[idx] = merged;
+  flush();
+  return merged;
 }

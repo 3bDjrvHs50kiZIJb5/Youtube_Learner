@@ -1,10 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePlayerStore } from '../store/player';
 import { subscribeVideoTime } from '../hooks/videoTime';
-import type { SubtitleCue, SubtitleWord } from '../types';
+import { speakViaTTS, getSentenceSpeed } from '../utils/tts';
+import type { SubtitleCue, SubtitleWord, WordExplanation } from '../types';
 
 interface Props {
-  onAddWord: (word: string, context: string, cueId: number) => void;
+  onAddWord: (
+    word: string,
+    context: string,
+    cueId: number,
+    explanation?: {
+      phonetic?: string;
+      pos?: string;
+      meaning?: string;
+      contextual?: string;
+    }
+  ) => void;
 }
 
 /** 没有字级时间戳时,按空格/标点 fallback 切分英文句子 */
@@ -108,34 +119,99 @@ function KaraokeLine({
   );
 }
 
+interface PopoverState {
+  word: string;
+  cueId: number;
+  context: string;
+  x: number;
+  y: number;
+}
+
 export function SubtitleOverlay({ onAddWord }: Props) {
   const { cues, activeCueId, showEnglish, showTranslation } = usePlayerStore();
-  const [popover, setPopover] = useState<{ word: string; cueId: number; x: number; y: number } | null>(
-    null
-  );
+  const [popover, setPopover] = useState<PopoverState | null>(null);
+  const [explanation, setExplanation] = useState<WordExplanation | null>(null);
+  const [explainLoading, setExplainLoading] = useState(false);
+  const [explainError, setExplainError] = useState<string | null>(null);
+  // 正在朗读当前字幕: 用来把按钮切成"停止/加载"态
+  const [speaking, setSpeaking] = useState(false);
 
   const cur: SubtitleCue | undefined = useMemo(
     () => cues.find((c) => c.id === activeCueId),
     [cues, activeCueId]
   );
+
+  // 打开新的 popover 时自动请求 AI 解释;切换单词需要取消上一个请求的回写
+  useEffect(() => {
+    if (!popover) {
+      setExplanation(null);
+      setExplainError(null);
+      setExplainLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setExplanation(null);
+    setExplainError(null);
+    setExplainLoading(true);
+    window.api
+      .wordExplain(popover.word, popover.context)
+      .then((res) => {
+        if (cancelled) return;
+        setExplanation(res);
+        setExplainLoading(false);
+      })
+      .catch((err: any) => {
+        if (cancelled) return;
+        setExplainError(err?.message || '解释失败');
+        setExplainLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [popover?.word, popover?.cueId]);
+
+  // 切换字幕时,状态自动重置 (正在朗读的那条会被 speakViaTTS 自己打断)
+  // 注意: 这个 Hook 必须放在任何 early return 之前, 否则切字幕时 Hooks 数量变化会抛
+  // "Rendered more hooks than during the previous render"
+  useEffect(() => {
+    setSpeaking(false);
+  }, [cur?.id]);
+
   if (!cur) return null;
+
+  const handleSpeakCue = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!cur?.text) return;
+    const speed = await getSentenceSpeed();
+    setSpeaking(true);
+    await speakViaTTS(cur.text, {
+      speed,
+      language: 'en',
+      onDone: () => setSpeaking(false),
+    });
+  };
 
   const handleWordClick = (word: string, cueId: number, e: React.MouseEvent) => {
     e.stopPropagation();
     const rect = (e.target as HTMLElement).getBoundingClientRect();
+    const cleanWord = word.toLowerCase().replace(/^[^a-z]+|[^a-z]+$/gi, '');
+    if (!cleanWord) return;
+    // 用 fixed 定位 + 视口坐标,popover 可以跨越 stage 边界而不偏位
     setPopover({
-      word: word.toLowerCase().replace(/^[^a-z]+|[^a-z]+$/gi, ''),
+      word: cleanWord,
       cueId,
-      x: rect.left,
-      y: rect.top - 44,
+      context: cur.text,
+      x: rect.left + rect.width / 2,
+      y: rect.top,
     });
   };
+
 
   return (
     <>
       <div className="subtitle-overlay" onClick={() => setPopover(null)}>
         {showEnglish && (
-          <div>
+          <div className="subtitle-en-wrap">
             <div className="line en">
               {cur.words && cur.words.length > 0 ? (
                 <KaraokeLine
@@ -159,6 +235,14 @@ export function SubtitleOverlay({ onAddWord }: Props) {
                 )
               )}
             </div>
+            <button
+              className="ghost icon-btn subtitle-speak-btn"
+              title="朗读当前字幕 (Qwen-TTS)"
+              onClick={handleSpeakCue}
+              disabled={speaking}
+            >
+              {speaking ? '⏳' : '🔊'}
+            </button>
           </div>
         )}
         {showTranslation && cur.translation && (
@@ -174,17 +258,65 @@ export function SubtitleOverlay({ onAddWord }: Props) {
           style={{ left: popover.x, top: popover.y }}
           onClick={(e) => e.stopPropagation()}
         >
-          <span className="w">{popover.word}</span>
-          <button
-            className="primary"
-            onClick={() => {
-              onAddWord(popover.word, cur.text, popover.cueId);
-              setPopover(null);
-            }}
-          >
-            加入生词本
-          </button>
-          <button className="ghost" onClick={() => setPopover(null)}>×</button>
+          <div className="word-popover-head">
+            <span className="w">{popover.word}</span>
+            {explanation?.phonetic && (
+              <span className="phonetic">{explanation.phonetic}</span>
+            )}
+            {explanation?.pos && <span className="pos">{explanation.pos}</span>}
+            <button
+              className="ghost close-x"
+              onClick={() => setPopover(null)}
+              title="关闭"
+            >
+              ×
+            </button>
+          </div>
+
+          <div className="word-popover-body">
+            {explainLoading && <div className="hint">正在查询解释…</div>}
+            {explainError && <div className="hint err">解释失败: {explainError}</div>}
+            {explanation && !explainLoading && !explainError && (
+              <>
+                {explanation.meaning && (
+                  <div className="meaning">{explanation.meaning}</div>
+                )}
+                {explanation.contextual && (
+                  <div className="contextual">
+                    <span className="tag">语境</span>
+                    {explanation.contextual}
+                  </div>
+                )}
+                {!explanation.meaning && !explanation.contextual && (
+                  <div className="hint">未获得有效解释</div>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="word-popover-foot">
+            <button
+              className="primary"
+              onClick={() => {
+                onAddWord(
+                  popover.word,
+                  popover.context,
+                  popover.cueId,
+                  explanation
+                    ? {
+                        phonetic: explanation.phonetic,
+                        pos: explanation.pos,
+                        meaning: explanation.meaning,
+                        contextual: explanation.contextual,
+                      }
+                    : undefined
+                );
+                setPopover(null);
+              }}
+            >
+              加入生词本
+            </button>
+          </div>
         </div>
       )}
     </>

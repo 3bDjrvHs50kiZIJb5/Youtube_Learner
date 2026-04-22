@@ -24,6 +24,8 @@ export interface PipelineState {
   srtPath?: string;
   /** 字幕条数(用于 UI 展示,避免恢复时必须读 SRT) */
   cueCount?: number;
+  /** 上次播放到的位置(毫秒),下次打开同一视频时可以续播 */
+  lastPositionMs?: number;
   updatedAt: number;
 }
 

@@ -56,6 +56,7 @@ export interface PipelineState {
   steps: { split: StepStatus; upload: StepStatus; asr: StepStatus; translate: StepStatus };
   srtPath?: string;
   cueCount?: number;
+  lastPositionMs?: number;
   updatedAt: number;
 }
 
@@ -69,6 +70,27 @@ export interface WordEntry {
   sentenceEndMs?: number;
   note?: string;
   createdAt?: number;
+  phonetic?: string;
+  pos?: string;
+  meaning?: string;
+  contextual?: string;
+}
+
+export interface WordExplanation {
+  word: string;
+  phonetic?: string;
+  pos?: string;
+  meaning?: string;
+  contextual?: string;
+}
+
+export interface AppTTSConfig {
+  model?: string;
+  voice?: string;
+  language?: string;
+  endpoint?: string;
+  /** 朗读倍速, 0.5~2.0, 默认 1.0。纯客户端 audio.playbackRate 实现 */
+  speed?: number;
 }
 
 export interface AppConfig {
@@ -81,11 +103,22 @@ export interface AppConfig {
     prefix?: string;
   };
   translateTarget?: string;
+  tts?: AppTTSConfig;
+}
+
+export interface TTSResult {
+  dataBase64: string;
+  mime: string;
 }
 
 declare global {
   interface Window {
     api: {
+      setWindowAspectRatio: (
+        ratio: number,
+        extra?: { extraWidth?: number; extraHeight?: number }
+      ) => Promise<boolean>;
+      clearWindowAspectRatio: () => Promise<boolean>;
       pickVideo: () => Promise<string | null>;
       toMediaUrl: (p: string) => Promise<string>;
       getPathForFile: (file: File) => string;
@@ -116,6 +149,8 @@ declare global {
       audioCleanup: (videoPath: string, opts?: { clearState?: boolean }) => Promise<boolean>;
       stateLoad: (videoPath: string) => Promise<PipelineState | null>;
       stateClear: (videoPath: string) => Promise<boolean>;
+      stateSavePosition: (videoPath: string, positionMs: number) => Promise<boolean>;
+      fileExists: (p: string) => Promise<boolean>;
       onWorker: (cb: (e: WorkerEvent) => void) => () => void;
       onResetWorkers: (cb: (phase: WorkerPhase) => void) => () => void;
       loadSubtitle: (p: string) => Promise<SubtitleCue[]>;
@@ -124,6 +159,14 @@ declare global {
       wordAdd: (entry: WordEntry) => Promise<WordEntry>;
       wordList: () => Promise<WordEntry[]>;
       wordDelete: (id: number) => Promise<boolean>;
+      wordExplain: (word: string, context: string) => Promise<WordExplanation>;
+      wordUpdate: (id: number, patch: Partial<WordEntry>) => Promise<WordEntry | null>;
+      ttsSynthesize: (opts: {
+        text: string;
+        voice?: string;
+        model?: string;
+        language?: string;
+      }) => Promise<TTSResult>;
       configGet: () => Promise<AppConfig>;
       configSet: (cfg: Partial<AppConfig>) => Promise<AppConfig>;
       onProgress: (

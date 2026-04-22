@@ -1,4 +1,4 @@
-import { IpcMain, dialog, BrowserWindow } from 'electron';
+import { IpcMain, dialog, BrowserWindow, screen } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
@@ -16,9 +16,11 @@ import {
   saveSubtitleBesideVideo,
   loadSubtitle,
   translateCues,
+  explainWord,
 } from '../services/subtitle';
-import { addWord, listWords, deleteWord, WordEntry } from '../services/db';
+import { addWord, listWords, deleteWord, updateWord, WordEntry } from '../services/db';
 import { getConfig, setConfig, AppConfig } from '../services/config';
+import { synthesizeSpeech, TTSOptions } from '../services/tts';
 import { loadState, saveState, clearState, PipelineState } from '../services/state';
 
 function sendProgress(stage: string, message: string, percent?: number) {
@@ -61,7 +63,110 @@ function cleanupSegments(dirs: string[]) {
   }
 }
 
+// 根据视频宽高比调整主窗口尺寸, 让"视频播放区"保持视频比例, 其他 chrome (顶栏/侧栏/控制条)
+// 作为固定像素的 extraSize, 不参与比例计算。拖拽缩放时也继续保持该比例。
+//
+// 设: ratio = videoW / videoH, extraW = 侧栏宽, extraH = 顶栏 + 控制条高
+//     contentW = outerW - extraW, contentH = outerH - extraH
+//     约束: contentW / contentH = ratio
+//
+// 策略:
+//  - 以当前 contentW 为起点反推 contentH, 如果总高超过屏幕, 就用最大高反推宽。
+//  - 位置尽量保持左上角, 超出工作区就推回来。
+//  - 最大化/全屏状态下 setBounds 无效, 先退出再改。
+function applyVideoAspectRatio(
+  win: BrowserWindow,
+  ratio: number,
+  extraWidth: number,
+  extraHeight: number
+) {
+  if (!Number.isFinite(ratio) || ratio <= 0) return;
+
+  if (win.isMaximized()) win.unmaximize();
+  if (win.isFullScreen()) win.setFullScreen(false);
+
+  const display = screen.getDisplayMatching(win.getBounds());
+  const workArea = display.workArea;
+
+  const [curW, curH] = win.getSize();
+  const [curX, curY] = win.getPosition();
+
+  const maxOuterW = Math.floor(workArea.width * 0.95);
+  const maxOuterH = Math.floor(workArea.height * 0.95);
+
+  // 先算内容区可用最大值
+  const maxContentW = Math.max(1, maxOuterW - extraWidth);
+  const maxContentH = Math.max(1, maxOuterH - extraHeight);
+
+  // 起点: 当前窗口对应的内容区宽度, 再按比例反推高度
+  let contentW = Math.max(1, Math.min(curW - extraWidth, maxContentW));
+  let contentH = Math.round(contentW / ratio);
+
+  if (contentH > maxContentH) {
+    contentH = maxContentH;
+    contentW = Math.round(contentH * ratio);
+  }
+  if (contentW > maxContentW) {
+    contentW = maxContentW;
+    contentH = Math.round(contentW / ratio);
+  }
+
+  // 最小尺寸兜底: 保证视频区至少有 480x270 的显示空间
+  const MIN_CONTENT_W = 480;
+  const MIN_CONTENT_H = 270;
+  if (contentW < MIN_CONTENT_W) {
+    contentW = MIN_CONTENT_W;
+    contentH = Math.round(contentW / ratio);
+  }
+  if (contentH < MIN_CONTENT_H) {
+    contentH = MIN_CONTENT_H;
+    contentW = Math.round(contentH * ratio);
+  }
+
+  const newW = contentW + extraWidth;
+  const newH = contentH + extraHeight;
+
+  let newX = curX;
+  let newY = curY;
+  if (newX + newW > workArea.x + workArea.width) newX = workArea.x + workArea.width - newW;
+  if (newY + newH > workArea.y + workArea.height) newY = workArea.y + workArea.height - newH;
+  if (newX < workArea.x) newX = workArea.x;
+  if (newY < workArea.y) newY = workArea.y;
+
+  win.setBounds({ x: newX, y: newY, width: newW, height: newH }, true);
+  // 锁定后续手动拖拽缩放也保持"视频区"比例
+  // macOS 支持 extraSize, Chromium 内部会在比例约束时先减去它;
+  // 其他平台 extraSize 被忽略, 但主流开发机是 macOS, 先满足这个场景。
+  win.setAspectRatio(ratio, { width: extraWidth, height: extraHeight });
+}
+
 export function registerIpcHandlers(ipcMain: IpcMain) {
+  // 视频加载完成后, 渲染进程把 videoWidth/videoHeight 和 chrome 尺寸传过来,
+  // 主进程据此调整窗口, 让视频区保持视频比例
+  ipcMain.handle(
+    'window:set-video-aspect-ratio',
+    (
+      event,
+      ratio: number,
+      extra?: { extraWidth?: number; extraHeight?: number }
+    ) => {
+      const win = BrowserWindow.fromWebContents(event.sender);
+      if (!win) return false;
+      const extraWidth = Math.max(0, Math.round(extra?.extraWidth ?? 0));
+      const extraHeight = Math.max(0, Math.round(extra?.extraHeight ?? 0));
+      applyVideoAspectRatio(win, ratio, extraWidth, extraHeight);
+      return true;
+    }
+  );
+
+  // 清空视频时解除比例锁, 允许窗口随意缩放
+  ipcMain.handle('window:clear-aspect-ratio', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win) return false;
+    win.setAspectRatio(0);
+    return true;
+  });
+
   ipcMain.handle('video:pick', async () => {
     const res = await dialog.showOpenDialog({
       title: '选择视频',
@@ -404,6 +509,27 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
     return true;
   });
 
+  // 记录视频当前播放位置,用于下次打开时续播
+  ipcMain.handle(
+    'state:save-position',
+    async (_e, videoPath: string, positionMs: number) => {
+      if (!videoPath || !Number.isFinite(positionMs) || positionMs < 0) return false;
+      saveState(videoPath, { lastPositionMs: Math.floor(positionMs) });
+      return true;
+    }
+  );
+
+  // 判断文件是否存在(WordBook 跨视频跳转前用来校验原视频是否还在)
+  ipcMain.handle('fs:exists', async (_e, p: string) => {
+    if (!p) return false;
+    try {
+      const st = fs.statSync(p);
+      return st.isFile();
+    } catch {
+      return false;
+    }
+  });
+
   ipcMain.handle('subtitle:load', async (_e, srtPath: string) => loadSubtitle(srtPath));
   ipcMain.handle('subtitle:save', async (_e, videoPath: string, cues: SubtitleCue[], suffix: string) =>
     saveSubtitleBesideVideo(videoPath, cues, suffix || '')
@@ -418,6 +544,14 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
     deleteWord(id);
     return true;
   });
+  ipcMain.handle('word:explain', async (_e, word: string, context: string) =>
+    explainWord(word, context)
+  );
+  ipcMain.handle('word:update', async (_e, id: number, patch: Partial<WordEntry>) =>
+    updateWord(id, patch)
+  );
+
+  ipcMain.handle('tts:synthesize', async (_e, opts: TTSOptions) => synthesizeSpeech(opts));
 
   ipcMain.handle('config:get', async () => {
     const cfg = getConfig();

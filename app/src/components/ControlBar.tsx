@@ -19,6 +19,7 @@ export function ControlBar({ videoRef }: { videoRef: RefObject<HTMLVideoElement>
     showEnglish,
     showTranslation,
     loopCueId,
+    loopRemaining,
     autoPauseAtSentenceEnd,
     toggleEnglish,
     toggleTranslation,
@@ -86,7 +87,11 @@ export function ControlBar({ videoRef }: { videoRef: RefObject<HTMLVideoElement>
     }
     const idx = Math.max(0, Math.min(cues.length - 1, curIdx + dir));
     const target = cues[idx];
-    if (target) v.currentTime = target.startMs / 1000;
+    if (!target) return;
+    // 复读开着时,切到目标句并把复读锁同步到新句,
+    // 否则 timeupdate 会立刻把视频拽回旧那句的开头。
+    if (loopCueId !== null) setLoop(target.id, loopRemaining);
+    v.currentTime = target.startMs / 1000;
   };
 
   const toggleLoopCurrent = () => {
@@ -158,39 +163,63 @@ export function ControlBar({ videoRef }: { videoRef: RefObject<HTMLVideoElement>
           {fmt(current)} / {fmt(duration)}
         </div>
       </div>
-      <div className="row">
-        <button onClick={() => jumpCue(-1)} title="上一句 (A)">⏮</button>
-        <button className="primary" onClick={togglePlay} title="播放/暂停 (Space)">
-          {playing ? '暂停' : '播放'}
+      <div className="row control-row">
+        <button className="nav-btn" onClick={() => jumpCue(-1)} title="上一句 (A)">
+          <span className="nav-btn-icon">⏮</span>
         </button>
-        <button onClick={() => jumpCue(1)} title="下一句 (D)">⏭</button>
+        <button
+          className={`play-btn ${playing ? 'is-playing' : 'is-paused'}`}
+          onClick={togglePlay}
+          title="播放/暂停 (Space)"
+        >
+          <span className="play-btn-icon">{playing ? '⏸' : '▶'}</span>
+          <span className="play-btn-label">{playing ? '暂停' : '播放'}</span>
+        </button>
+        <button className="nav-btn" onClick={() => jumpCue(1)} title="下一句 (D)">
+          <span className="nav-btn-icon">⏭</span>
+        </button>
 
-        <span
-          className={`chip ${loopCueId !== null ? 'active' : ''}`}
+        <span className="divider" />
+
+        <button
+          className={`toggle-chip ${loopCueId !== null ? 'active' : ''}`}
           onClick={toggleLoopCurrent}
           title="整句复读 (R)"
         >
-          🔁 复读
-        </span>
-        <span
-          className={`chip ${autoPauseAtSentenceEnd ? 'active' : ''}`}
+          <span className="toggle-chip-icon">🔁</span>
+          <span className="toggle-chip-label">复读</span>
+        </button>
+        <button
+          className={`toggle-chip ${autoPauseAtSentenceEnd ? 'active' : ''}`}
           onClick={toggleAutoPause}
           title="精读模式:句末自动暂停 (P)"
         >
-          ⏸ 精读
-        </span>
-        <span className={`chip ${showEnglish ? 'active' : ''}`} onClick={toggleEnglish} title="E">
-          EN
-        </span>
-        <span
-          className={`chip ${showTranslation ? 'active' : ''}`}
-          onClick={toggleTranslation}
-          title="Z"
+          <span className="toggle-chip-icon">📖</span>
+          <span className="toggle-chip-label">精读</span>
+        </button>
+        <button
+          className={`toggle-chip ${showEnglish ? 'active' : ''}`}
+          onClick={toggleEnglish}
+          title="显示英文字幕 (E)"
         >
-          中文
-        </span>
+          <span className="toggle-chip-label">EN</span>
+        </button>
+        <button
+          className={`toggle-chip ${showTranslation ? 'active' : ''}`}
+          onClick={toggleTranslation}
+          title="显示中文翻译 (Z)"
+        >
+          <span className="toggle-chip-label">中文</span>
+        </button>
 
-        <select value={rate} onChange={(e) => changeRate(+e.target.value)}>
+        <span className="divider" />
+
+        <select
+          className="rate-select"
+          value={rate}
+          onChange={(e) => changeRate(+e.target.value)}
+          title="播放速度"
+        >
           {[0.5, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 2].map((r) => (
             <option key={r} value={r}>
               {r}x

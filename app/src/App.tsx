@@ -7,6 +7,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { YtDlpModal } from './components/YtDlpModal';
 import { VideoSplitModal } from './components/VideoSplitModal';
 import { ProgressPanel } from './components/ProgressPanel';
+import { APP_TOAST_EVENT, AppToastDetail } from './utils/toast';
 
 function StepIcon({ status }: { status: StepStatus }) {
   if (status === 'done') return <span style={{ color: 'var(--success)' }}>✓</span>;
@@ -31,6 +32,7 @@ export default function App() {
     setUploaded,
     updateWorker,
     resetWorkerPanel,
+    setInitialSeek,
   } = usePlayerStore();
   const [tab, setTab] = useState<'cue' | 'word' | 'progress'>('cue');
   const [busy, setBusy] = useState(false);
@@ -55,6 +57,16 @@ export default function App() {
     return () => clearTimeout(t);
   }, [toast]);
 
+  // 监听来自非 App 组件(比如 utils/tts.ts)派发的全局 toast
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<AppToastDetail>).detail;
+      if (detail?.message) setToast(detail.message);
+    };
+    window.addEventListener(APP_TOAST_EVENT, handler);
+    return () => window.removeEventListener(APP_TOAST_EVENT, handler);
+  }, []);
+
   // 根据绝对路径打开视频(pickVideo 和 拖拽入口共用)
   const openVideoByPath = useCallback(
     async (p: string) => {
@@ -75,6 +87,14 @@ export default function App() {
         if (state.steps.upload === 'done') restored.push(`${state.uploaded.length} 段已上传`);
         if (state.steps.asr === 'done') restored.push(`字幕已生成`);
         if (state.steps.translate === 'done') restored.push(`翻译已完成`);
+        // 记录上次播放位置(超过 3 秒才值得续播)
+        if (state.lastPositionMs && state.lastPositionMs > 3000) {
+          setInitialSeek(state.lastPositionMs);
+          const sec = Math.floor(state.lastPositionMs / 1000);
+          const mm = String(Math.floor(sec / 60)).padStart(2, '0');
+          const ss = String(sec % 60).padStart(2, '0');
+          restored.push(`续播自 ${mm}:${ss}`);
+        }
         if (restored.length) setToast(`已恢复上次进度: ${restored.join(' · ')}`);
       }
 
@@ -96,29 +116,33 @@ export default function App() {
         }
       }
     },
-    [setVideo, setSegments, setUploaded, setStep, setCues]
+    [setVideo, setSegments, setUploaded, setStep, setCues, setInitialSeek]
   );
+
+  // WordBook 的"回到语境"触发跨视频跳转:先切换到目标视频,再按 startMs 续播
+  useEffect(() => {
+    const handler = async (e: Event) => {
+      const detail = (e as CustomEvent).detail as { videoPath: string; startMs: number };
+      if (!detail?.videoPath) return;
+      try {
+        await openVideoByPath(detail.videoPath);
+        // openVideoByPath 内部可能用 lastPositionMs 覆盖了 initialSeek,
+        // 这里再强制改回生词所在的句子起点
+        setInitialSeek(detail.startMs);
+      } catch (err: any) {
+        // 常见:生词记录的视频被移走/删掉,toMediaUrl 或后续步骤抛错
+        setToast(`打开原视频失败: ${err?.message || err}`);
+      }
+    };
+    window.addEventListener('openAndSeek', handler as EventListener);
+    return () => window.removeEventListener('openAndSeek', handler as EventListener);
+  }, [openVideoByPath, setInitialSeek]);
 
   // ① 打开视频
   const pickVideo = async () => {
     const p = await window.api.pickVideo();
     if (!p) return;
     await openVideoByPath(p);
-  };
-
-  // 重置(清除切段文件 + 状态)
-  const doReset = async () => {
-    if (!videoPath) return;
-    if (!confirm('确认重置?\n会清除本地切段文件与进度记录(OSS 上的文件不会删除)。')) return;
-    await window.api.audioCleanup(videoPath, { clearState: true });
-    setSegments([]);
-    setUploaded([]);
-    setCues([]);
-    setStep('split', 'idle');
-    setStep('upload', 'idle');
-    setStep('asr', 'idle');
-    setStep('translate', 'idle');
-    setToast('已重置');
   };
 
   // ② 分离音频
@@ -208,6 +232,9 @@ export default function App() {
       setStep('upload', state.steps.upload);
       setStep('asr', state.steps.asr);
       setStep('translate', state.steps.translate);
+      if (state.lastPositionMs && state.lastPositionMs > 3000) {
+        setInitialSeek(state.lastPositionMs);
+      }
       splitDone = state.steps.split === 'done' && segs.length > 0;
       uploadDone = state.steps.upload === 'done' && ups.length > 0;
       asrDone = state.steps.asr === 'done';
@@ -296,15 +323,34 @@ export default function App() {
   };
 
   const addWord = useCallback(
-    async (word: string, context: string, cueId: number) => {
+    async (
+      word: string,
+      context: string,
+      cueId: number,
+      explanation?: {
+        phonetic?: string;
+        pos?: string;
+        meaning?: string;
+        contextual?: string;
+      }
+    ) => {
       const cue = cues.find((c) => c.id === cueId);
+      // translation 字段保留兼容旧数据:优先 AI 释义,其次整句翻译
+      const translation =
+        [explanation?.pos, explanation?.meaning].filter(Boolean).join(' ').trim() ||
+        explanation?.contextual ||
+        cue?.translation;
       await window.api.wordAdd({
         word,
         context,
-        translation: cue?.translation,
+        translation,
         videoPath: videoPath || undefined,
         sentenceStartMs: cue?.startMs,
         sentenceEndMs: cue?.endMs,
+        phonetic: explanation?.phonetic,
+        pos: explanation?.pos,
+        meaning: explanation?.meaning,
+        contextual: explanation?.contextual,
       });
       setWordRefresh((k) => k + 1);
       setToast(`已加入生词本: ${word}`);
@@ -396,14 +442,7 @@ export default function App() {
           {steps.translate === 'done' && <span className="badge">已翻译</span>}
         </button>
 
-        <button
-          onClick={doReset}
-          disabled={!videoPath || busy}
-          title="清除本地切段文件与进度记录,重新开始(OSS 上的文件不会删除)"
-        >
-          ↺ 重置
-        </button>
-        <button onClick={() => setSettingsOpen(true)}>⚙</button>
+        <button onClick={() => setSettingsOpen(true)}>⚙ 设置</button>
       </div>
 
       <Player onAddWord={addWord} onDropVideo={openVideoByPath} />

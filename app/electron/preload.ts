@@ -2,6 +2,14 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 // 渲染进程可以用 window.api.xxx 调用这些方法，全部走 IPC
 const api = {
+  // 窗口控制: 视频加载完后按视频比例调整窗口
+  // extra = { extraWidth: 侧栏宽, extraHeight: 顶栏+控制条高 }
+  setWindowAspectRatio: (
+    ratio: number,
+    extra?: { extraWidth?: number; extraHeight?: number }
+  ) => ipcRenderer.invoke('window:set-video-aspect-ratio', ratio, extra),
+  clearWindowAspectRatio: () => ipcRenderer.invoke('window:clear-aspect-ratio'),
+
   // 文件 & 视频
   pickVideo: () => ipcRenderer.invoke('video:pick'),
   toMediaUrl: (absolutePath: string) => ipcRenderer.invoke('video:to-media-url', absolutePath),
@@ -34,6 +42,11 @@ const api = {
   // 状态持久化
   stateLoad: (videoPath: string) => ipcRenderer.invoke('state:load', videoPath),
   stateClear: (videoPath: string) => ipcRenderer.invoke('state:clear', videoPath),
+  stateSavePosition: (videoPath: string, positionMs: number) =>
+    ipcRenderer.invoke('state:save-position', videoPath, positionMs),
+
+  // 文件系统
+  fileExists: (p: string) => ipcRenderer.invoke('fs:exists', p),
 
   // 字幕
   loadSubtitle: (subtitlePath: string) => ipcRenderer.invoke('subtitle:load', subtitlePath),
@@ -46,6 +59,12 @@ const api = {
   wordAdd: (entry: unknown) => ipcRenderer.invoke('word:add', entry),
   wordList: () => ipcRenderer.invoke('word:list'),
   wordDelete: (id: number) => ipcRenderer.invoke('word:delete', id),
+  wordExplain: (word: string, context: string) =>
+    ipcRenderer.invoke('word:explain', word, context),
+  wordUpdate: (id: number, patch: unknown) => ipcRenderer.invoke('word:update', id, patch),
+
+  ttsSynthesize: (opts: { text: string; voice?: string; model?: string; language?: string }) =>
+    ipcRenderer.invoke('tts:synthesize', opts),
 
   // 配置（AccessKey 等）
   configGet: () => ipcRenderer.invoke('config:get'),

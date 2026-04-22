@@ -43,14 +43,20 @@ export interface PlayerState {
 
   progress: { stage: string; message: string; percent?: number } | null;
 
+  /** 打开视频时待恢复的播放位置(毫秒);Player 在 loadedmetadata 后消费并清空 */
+  initialSeekMs: number | null;
+
   // 分步骤状态
   steps: PipelineSteps;
   segments: AudioSegment[];
   uploaded: UploadedSegment[];
 
   setVideo: (videoPath: string, mediaUrl: string) => void;
+  setInitialSeek: (ms: number | null) => void;
   setCues: (cues: SubtitleCue[]) => void;
   updateCueTranslation: (cueId: number, translation: string) => void;
+  /** 编辑字幕文本与译文(未传的字段保持不变) */
+  updateCue: (cueId: number, patch: { text?: string; translation?: string }) => void;
   setActiveCue: (id: number | null) => void;
   toggleEnglish: () => void;
   toggleTranslation: () => void;
@@ -88,6 +94,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   loopRemaining: 0,
   autoPauseAtSentenceEnd: false,
   progress: null,
+  initialSeekMs: null,
 
   steps: { ...initialSteps },
   segments: [],
@@ -102,11 +109,23 @@ export const usePlayerStore = create<PlayerState>((set) => ({
       steps: { ...initialSteps },
       segments: [],
       uploaded: [],
+      initialSeekMs: null,
     }),
+  setInitialSeek: (ms) => set({ initialSeekMs: ms }),
   setCues: (cues) => set({ cues }),
   updateCueTranslation: (cueId, translation) =>
     set((s) => ({
       cues: s.cues.map((c) => (c.id === cueId ? { ...c, translation } : c)),
+    })),
+  updateCue: (cueId, patch) =>
+    set((s) => ({
+      cues: s.cues.map((c) => {
+        if (c.id !== cueId) return c;
+        const next = { ...c };
+        if (patch.text !== undefined) next.text = patch.text;
+        if (patch.translation !== undefined) next.translation = patch.translation;
+        return next;
+      }),
     })),
   setActiveCue: (id) => set({ activeCueId: id }),
   toggleEnglish: () => set((s) => ({ showEnglish: !s.showEnglish })),

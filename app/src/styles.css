@@ -191,6 +191,41 @@ input:focus, textarea:focus { border-color: var(--primary); }
 }
 .subtitle-overlay .en { color: #fff; }
 .subtitle-overlay .zh { color: #ffd27a; font-size: 18px; }
+
+/* 英文字幕 + 朗读按钮 行容器: 用 inline-flex 保证按钮贴在字幕右侧,
+   并一起随字幕居中; pointer-events: auto 让按钮可点(父 overlay 是 none) */
+.subtitle-overlay .subtitle-en-wrap {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 6px;
+  pointer-events: auto;
+}
+.subtitle-overlay .subtitle-speak-btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 12px;
+  line-height: 1;
+  background: rgba(0, 0, 0, 0.65);
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  pointer-events: auto;
+  flex-shrink: 0;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.subtitle-overlay .subtitle-speak-btn:hover:not(:disabled) {
+  background: rgba(91, 140, 255, 0.6);
+}
+.subtitle-overlay .subtitle-speak-btn:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
 .subtitle-overlay .word {
   cursor: pointer;
   padding: 0 1px;
@@ -291,6 +326,152 @@ input:focus, textarea:focus { border-color: var(--primary); }
 }
 .controls .chip.active { background: var(--primary); border-color: var(--primary); color: #fff; }
 
+/* ==========================================================
+   控制条按钮统一设计
+   所有按钮共享:32px 高、圆角 8px、柔和过渡
+   ========================================================== */
+.control-row > button,
+.control-row > .rate-select {
+  height: 32px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1;
+  transition: background 0.2s, border-color 0.2s, box-shadow 0.2s, color 0.2s, transform 0.1s;
+}
+.control-row > button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.control-row .divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  margin: 0 2px;
+  align-self: center;
+}
+
+/* 上一句 / 下一句:方形图标按钮 */
+.nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  padding: 0;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.nav-btn:hover:not(:disabled) {
+  background: #262c38;
+  border-color: #3a4252;
+  color: var(--text);
+}
+.nav-btn-icon { font-size: 14px; }
+
+/* 播放/暂停按钮:两种状态视觉上要能一眼分辨 */
+.play-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 92px;
+  padding: 0 14px;
+  justify-content: center;
+  font-weight: 600;
+}
+.play-btn .play-btn-icon { font-size: 13px; line-height: 1; }
+
+/* 播放中:低调的暗色,不抢视线 */
+.play-btn.is-playing {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+.play-btn.is-playing:hover:not(:disabled) {
+  background: #262c38;
+  border-color: #3a4252;
+}
+
+/* 暂停:醒目的琥珀色 + 呼吸光晕,提示"点我继续" */
+.play-btn.is-paused {
+  background: var(--warn);
+  border: 1px solid var(--warn);
+  color: #1a1205;
+  animation: play-btn-pulse 1.6s ease-in-out infinite;
+}
+.play-btn.is-paused:hover:not(:disabled) {
+  background: #ffbf4a;
+  border-color: #ffbf4a;
+  animation: none;
+}
+@keyframes play-btn-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 165, 36, 0.55); }
+  50%      { box-shadow: 0 0 0 6px rgba(245, 165, 36, 0); }
+}
+
+/* 开关 chip:统一的 toggle 样式,激活=主色实心,未激活=幽灵 */
+.toggle-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 12px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-weight: 500;
+  cursor: pointer;
+}
+.toggle-chip:hover:not(:disabled) {
+  background: var(--panel-2);
+  border-color: #3a4252;
+  color: var(--text);
+}
+.toggle-chip-icon { font-size: 13px; line-height: 1; }
+.toggle-chip-label { font-size: 12px; letter-spacing: 0.2px; }
+
+/*
+  TTS 朗读过程中的圆形 loading 指示器,CueList / SubtitleOverlay / WordBook
+  的「AI 复读中」按钮共用。做成 inline-block,能直接插在 emoji 的位置,
+  不破坏按钮排版。
+*/
+.tts-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: tts-spinner-rotate 0.8s linear infinite;
+  vertical-align: -2px;
+}
+@keyframes tts-spinner-rotate {
+  to { transform: rotate(360deg); }
+}
+
+.toggle-chip.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+  box-shadow: 0 0 0 3px rgba(91, 140, 255, 0.18);
+}
+.toggle-chip.active:hover:not(:disabled) {
+  background: var(--primary-2);
+  border-color: var(--primary-2);
+  color: #fff;
+}
+
+/* 速率选择器:跟按钮等高,风格对齐 */
+.rate-select {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  min-width: 64px;
+}
+.rate-select:hover { background: #262c38; border-color: #3a4252; }
+.rate-select:focus { border-color: var(--primary); }
+
 /* sidebar */
 .sidebar {
   background: var(--panel);
@@ -328,21 +509,186 @@ input:focus, textarea:focus { border-color: var(--primary); }
 .cue-item .time { font-size: 11px; color: var(--muted); margin-bottom: 2px; }
 .cue-item .en { font-size: 13px; color: var(--text); margin-bottom: 2px; }
 .cue-item .zh { font-size: 12px; color: var(--muted); }
-.cue-item .actions { display: none; margin-top: 6px; gap: 6px; }
+.cue-item .actions { display: none; margin-top: 6px; gap: 6px; flex-wrap: wrap; }
 .cue-item.active .actions { display: flex; }
 
-.word-list { padding: 8px; }
-.word-card {
-  padding: 10px;
+.cue-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 8px;
   background: var(--panel-2);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  margin-bottom: 6px;
 }
-.word-card .w { font-weight: 600; font-size: 15px; margin-bottom: 4px; }
-.word-card .ctx { font-size: 12px; color: var(--muted); margin-bottom: 2px; font-style: italic; }
+.cue-edit-label {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.cue-edit-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 6px 8px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  /* 由 JS 根据 scrollHeight 自适应高度,所以禁用手动拖拽和滚动条 */
+  resize: none;
+  overflow: hidden;
+  font-family: inherit;
+}
+.cue-edit-input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+.cue-edit-buttons {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.word-list { padding: 8px; }
+.word-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.word-toolbar .word-count {
+  font-size: 12px;
+  color: var(--muted);
+}
+.word-toolbar .word-export-btn {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 5px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.word-toolbar .word-export-btn:hover:not(:disabled) {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+.word-toolbar .word-export-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.word-banner {
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  background: var(--panel-2);
+  border-left: 3px solid var(--warn);
+  border-radius: 4px;
+  font-size: 13px;
+  color: var(--text);
+}
+.word-card {
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.word-card .word-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.word-card .w { font-weight: 700; font-size: 16px; }
+.word-card .phonetic {
+  color: var(--muted);
+  font-size: 12px;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+}
+.word-card .pos {
+  color: var(--primary);
+  background: rgba(91, 140, 255, 0.15);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+.word-card .icon-btn {
+  margin-left: auto;
+  padding: 1px 5px;
+  font-size: 11px;
+  line-height: 1;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+.word-card .icon-btn:hover:not(:disabled) { background: var(--panel); }
+/* 第一个 icon-btn 靠 margin-left:auto 把自己推到最右,后续的按钮贴着它即可 */
+.word-card .word-card-head .icon-btn + .icon-btn { margin-left: 4px; }
+/* 「求解释」小图标比普通 icon-btn 更柔和一点,提示它是建议/辅助动作 */
+.word-card .explain-btn { color: var(--primary); }
+.word-card .explain-btn:disabled { opacity: 0.6; }
+.word-card .meaning {
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.5;
+  word-break: break-word;
+}
+.word-card .contextual {
+  font-size: 12px;
+  color: var(--success);
+  line-height: 1.5;
+  word-break: break-word;
+}
+.word-card .contextual .tag {
+  display: inline-block;
+  background: rgba(62, 207, 142, 0.18);
+  color: var(--success);
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-right: 6px;
+  vertical-align: 1px;
+}
+.word-card .ctx {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  font-style: italic;
+  word-break: break-word;
+}
+.word-card .ctx .ctx-text {
+  flex: 1;
+  min-width: 0;
+}
+.word-card .ctx .ctx-speak {
+  flex: 0 0 auto;
+  font-style: normal;
+  margin-top: -1px;
+}
 .word-card .tr { font-size: 12px; color: var(--success); }
-.word-card .bar { display: flex; justify-content: space-between; margin-top: 6px; font-size: 11px; color: var(--muted); }
-.word-card .bar a { color: var(--primary); cursor: pointer; }
+.word-card .bar {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.word-card .bar a {
+  color: var(--primary);
+  cursor: pointer;
+}
+.word-card .bar a:hover { text-decoration: underline; }
 
 /* modal */
 .modal-mask {
@@ -383,6 +729,42 @@ input:focus, textarea:focus { border-color: var(--primary); }
 .modal .field label { font-size: 12px; color: var(--muted); }
 .modal .footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 
+/* 设置对话框:Tab 分页版,让内容区独立滚动,tab 栏常驻顶部 */
+.settings-modal {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 16px 20px 16px;
+}
+.settings-tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+  margin: 4px -20px 12px;
+  padding: 0 16px;
+}
+.settings-tab {
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color 0.15s, border-color 0.15s;
+  user-select: none;
+}
+.settings-tab:hover { color: var(--text); }
+.settings-tab.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+.settings-body {
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 4px;
+  margin-right: -4px;
+}
+
 .toast {
   position: fixed;
   bottom: 20px;
@@ -398,19 +780,90 @@ input:focus, textarea:focus { border-color: var(--primary); }
 }
 
 .word-popover {
-  position: absolute;
-  z-index: 10;
+  /* fixed 定位 + 以单词中心为锚点,避免被父容器 overflow 裁剪 */
+  position: fixed;
+  z-index: 50;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px 10px;
-  box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+  border-radius: 10px;
+  padding: 10px 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
   font-size: 13px;
+  min-width: 240px;
+  max-width: 360px;
+  transform: translate(-50%, calc(-100% - 10px));
   display: flex;
+  flex-direction: column;
   gap: 8px;
-  align-items: center;
 }
-.word-popover .w { font-weight: 600; }
+.word-popover .word-popover-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.word-popover .w {
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--text);
+}
+.word-popover .phonetic {
+  color: var(--muted);
+  font-size: 12px;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+}
+.word-popover .pos {
+  color: var(--primary);
+  background: rgba(91, 140, 255, 0.15);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+.word-popover .close-x {
+  margin-left: auto;
+  padding: 2px 8px;
+  font-size: 16px;
+  line-height: 1;
+}
+.word-popover-body {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.word-popover-body .meaning {
+  color: var(--text);
+  word-break: break-word;
+}
+.word-popover-body .contextual {
+  color: var(--success);
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+.word-popover-body .tag {
+  display: inline-block;
+  background: rgba(62, 207, 142, 0.18);
+  color: var(--success);
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-right: 6px;
+  vertical-align: 1px;
+}
+.word-popover-body .hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+.word-popover-body .hint.err {
+  color: var(--danger);
+}
+.word-popover-foot {
+  display: flex;
+  justify-content: flex-end;
+}
 
 /* progress panel */
 .progress-panel { padding: 8px; display: flex; flex-direction: column; gap: 12px; }
