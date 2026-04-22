@@ -98,6 +98,8 @@ npm run dev
 - DashScope API Key
 - OSS region / bucket / accessKeyId / accessKeySecret
 
+> 这里如果不会的话，可以去GPT或者是豆包等去问一下怎么填。这里需要准备一个阿里云的账号，然后获取到ASR的API和OSS的API
+
 这些配置会存在 `electron-store` 默认路径下（macOS：`~/Library/Application Support/video-learner/config.json`），**不会**写到代码仓库里。
 
 ## 使用流程
