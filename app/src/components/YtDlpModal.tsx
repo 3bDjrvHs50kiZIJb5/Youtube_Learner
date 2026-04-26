@@ -59,7 +59,6 @@ function extractVideoId(rawUrl: string): string {
 export function YtDlpModal({ onClose }: { onClose: () => void }) {
   const [url, setUrl] = useState('https://www.youtube.com/watch?v=tFsETEP01k8');
   const [browser, setBrowser] = useState<Browser>('chrome');
-  const [outDir, setOutDir] = useState('');
   const [subs, setSubs] = useState(false);
   const [audioOnly, setAudioOnly] = useState(false);
   const [codec, setCodec] = useState<CodecPreset>('vp9');
@@ -90,13 +89,12 @@ export function YtDlpModal({ onClose }: { onClose: () => void }) {
     if (subs) {
       parts.push('--write-subs', '--write-auto-subs', '--sub-langs', 'en,zh-Hans');
     }
-    const effectiveOutDir = outDir.trim() || (videoId ? `~/Downloads/${videoId}` : '');
-    if (effectiveOutDir) {
-      parts.push('-P', shellQuote(effectiveOutDir));
+    if (videoId) {
+      parts.push('-P', shellQuote(`~/Downloads/${videoId}`));
     }
     parts.push(shellQuote(url.trim()));
     return parts.join(' ');
-  }, [url, browser, outDir, subs, audioOnly, codec, videoId]);
+  }, [url, browser, subs, audioOnly, codec, videoId]);
 
   const copy = async () => {
     try {
@@ -107,7 +105,6 @@ export function YtDlpModal({ onClose }: { onClose: () => void }) {
         subs,
         audioOnly,
         codec,
-        outDir: outDir.trim() || undefined,
       });
       await navigator.clipboard.writeText(result.command);
       setCopied(true);
@@ -170,19 +167,8 @@ export function YtDlpModal({ onClose }: { onClose: () => void }) {
           </select>
         </div>
 
-        <div className="field">
-          <label>输出目录(可选)</label>
-          <input
-            value={outDir}
-            onChange={(e) => setOutDir(e.target.value)}
-            placeholder="留空则自动下载到 ~/Downloads/视频ID"
-          />
-        </div>
-
         <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
-          {videoId
-            ? `本次会自动建文件夹：${outDir.trim() || `~/Downloads/${videoId}`}`
-            : '请输入包含 v= 的 YouTube 链接'}
+          {videoId ? `本次会自动下载到：~/Downloads/${videoId}` : '请输入包含 v= 的 YouTube 链接'}
         </div>
 
         <div style={{ display: 'flex', gap: 16, marginBottom: 12, fontSize: 13 }}>

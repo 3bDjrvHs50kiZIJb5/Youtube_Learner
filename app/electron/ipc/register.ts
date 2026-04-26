@@ -78,7 +78,6 @@ interface YtDlpLaunchOptions {
   subs: boolean;
   audioOnly: boolean;
   codec: YtDlpCodecPreset;
-  outDir?: string;
 }
 
 function shellQuote(value: string): string {
@@ -354,7 +353,7 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
       if (!url) throw new Error('请先输入视频链接');
 
       const videoId = extractYoutubeVideoId(url);
-      const baseDir = (options?.outDir || '').trim() || app.getPath('downloads');
+      const baseDir = app.getPath('downloads');
       const targetDir = path.join(baseDir, videoId);
       fs.mkdirSync(targetDir, { recursive: true });
 

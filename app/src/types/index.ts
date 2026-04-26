@@ -158,7 +158,6 @@ declare global {
         subs: boolean;
         audioOnly: boolean;
         codec: string;
-        outDir?: string;
       }) => Promise<YtDlpLaunchResult>;
       audioSplit: (
         videoPath: string,
