@@ -790,10 +790,15 @@ function buildSubtitleFilter(subtitlePath: string): string {
 type ExportSubtitleMode = 'english' | 'bilingual';
 
 function cuesToStyledAss(cues: SubtitleCue[], mode: ExportSubtitleMode): string {
+  // 播放器字幕容器:
+  // width: 100%; max-width: 1200px; padding: 0 40px;
+  // 在 1920 基准宽度下,实际可用字幕宽度约 1120px,左右边距约 400px。
+  // 这里同步到导出字幕,并开启 ASS 自动换行,避免长句被硬塞成一整行。
+  const exportSubtitleMarginX = 400;
   const lines = [
     '[Script Info]',
     'ScriptType: v4.00+',
-    'WrapStyle: 2',
+    'WrapStyle: 0',
     'ScaledBorderAndShadow: yes',
     'PlayResX: 1920',
     'PlayResY: 1080',
@@ -801,8 +806,8 @@ function cuesToStyledAss(cues: SubtitleCue[], mode: ExportSubtitleMode): string 
     '[V4+ Styles]',
     'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
     // 参考当前播放器: 底部居中、黑色半透明底、英文偏绿色、中文偏金黄。
-    'Style: ExportEN,Arial,28,&H00A8FFB8,&H00A8FFB8,&H00000000,&H7A000000,1,0,0,0,100,100,0,0,4,0,0,2,220,220,134,1',
-    'Style: ExportZH,Arial,24,&H007AD2FF,&H007AD2FF,&H00000000,&H7A000000,1,0,0,0,100,100,0,0,4,0,0,2,260,260,78,1',
+    `Style: ExportEN,Arial,28,&H00A8FFB8,&H00A8FFB8,&H00000000,&H7A000000,1,0,0,0,100,100,0,0,4,0,0,2,${exportSubtitleMarginX},${exportSubtitleMarginX},134,1`,
+    `Style: ExportZH,Arial,24,&H007AD2FF,&H007AD2FF,&H00000000,&H7A000000,1,0,0,0,100,100,0,0,4,0,0,2,${exportSubtitleMarginX},${exportSubtitleMarginX},78,1`,
     '',
     '[Events]',
     'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
