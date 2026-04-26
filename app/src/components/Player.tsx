@@ -42,6 +42,21 @@ export function Player({ onAddWord, onDropVideo }: Props) {
   const [dragOver, setDragOver] = useState(false);
   const [dropError, setDropError] = useState<string | null>(null);
 
+  const findCueIdAtMs = (ms: number) => cues.find((c) => ms >= c.startMs && ms < c.endMs)?.id ?? null;
+  const findCueIdForPlayback = (ms: number) => {
+    const currentCueId = findCueIdAtMs(ms);
+    if (currentCueId !== null) return currentCueId;
+    for (let i = 0; i < cues.length; i += 1) {
+      const cue = cues[i];
+      const nextCue = cues[i + 1];
+      if (ms < cue.startMs) return null;
+      if (ms >= cue.endMs && (!nextCue || ms < nextCue.startMs)) {
+        return cue.id;
+      }
+    }
+    return null;
+  };
+
   // 当前排好的"到句末"定时器 id, 跨 effect 重建保留
   const schedRef = useRef<{ endTimer: number | null }>({ endTimer: null });
 
@@ -59,14 +74,16 @@ export function Player({ onAddWord, onDropVideo }: Props) {
         editingCueId ??
         (() => {
           const ms = v.currentTime * 1000;
-          if (autoPauseAtSentenceEnd && activeCueId !== null) {
+          if (!v.paused && autoPauseAtSentenceEnd && activeCueId !== null) {
             const activeCue = cues.find((c) => c.id === activeCueId);
             if (activeCue && ms >= activeCue.endMs && ms < activeCue.endMs + 80) {
               return activeCue.id;
             }
           }
-          const cur = cues.find((c) => ms >= c.startMs && ms < c.endMs);
-          return cur?.id ?? null;
+          if (!v.paused) {
+            return findCueIdForPlayback(ms);
+          }
+          return findCueIdAtMs(ms);
         })();
       if (curId !== activeCueId) setActiveCue(curId);
     };
