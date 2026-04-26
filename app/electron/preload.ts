@@ -64,11 +64,12 @@ const api = {
 
   // 生词本
   wordAdd: (entry: unknown) => ipcRenderer.invoke('word:add', entry),
-  wordList: () => ipcRenderer.invoke('word:list'),
-  wordDelete: (id: number) => ipcRenderer.invoke('word:delete', id),
+  wordList: (videoPath?: string) => ipcRenderer.invoke('word:list', videoPath),
+  wordDelete: (id: number, bucketKey?: string) => ipcRenderer.invoke('word:delete', id, bucketKey),
   wordExplain: (word: string, context: string) =>
     ipcRenderer.invoke('word:explain', word, context),
-  wordUpdate: (id: number, patch: unknown) => ipcRenderer.invoke('word:update', id, patch),
+  wordUpdate: (id: number, patch: unknown, bucketKey?: string) =>
+    ipcRenderer.invoke('word:update', id, patch, bucketKey),
 
   ttsSynthesize: (opts: { text: string; voice?: string; model?: string; language?: string }) =>
     ipcRenderer.invoke('tts:synthesize', opts),

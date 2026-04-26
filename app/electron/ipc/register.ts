@@ -739,16 +739,16 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
   );
 
   ipcMain.handle('word:add', async (_e, entry: WordEntry) => addWord(entry));
-  ipcMain.handle('word:list', async () => listWords());
-  ipcMain.handle('word:delete', async (_e, id: number) => {
-    deleteWord(id);
+  ipcMain.handle('word:list', async (_e, videoPath?: string) => listWords(videoPath));
+  ipcMain.handle('word:delete', async (_e, id: number, bucketKey?: string) => {
+    deleteWord(id, bucketKey);
     return true;
   });
   ipcMain.handle('word:explain', async (_e, word: string, context: string) =>
     explainWord(word, context)
   );
-  ipcMain.handle('word:update', async (_e, id: number, patch: Partial<WordEntry>) =>
-    updateWord(id, patch)
+  ipcMain.handle('word:update', async (_e, id: number, patch: Partial<WordEntry>, bucketKey?: string) =>
+    updateWord(id, patch, bucketKey)
   );
 
   ipcMain.handle('tts:synthesize', async (_e, opts: TTSOptions) => synthesizeSpeech(opts));

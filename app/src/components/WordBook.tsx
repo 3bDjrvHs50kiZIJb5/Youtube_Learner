@@ -17,8 +17,12 @@ export function WordBook({ refreshKey }: { refreshKey: number }) {
   const currentVideoPath = usePlayerStore((s) => s.videoPath);
 
   useEffect(() => {
-    window.api.wordList().then(setWords);
-  }, [refreshKey]);
+    if (!currentVideoPath) {
+      setWords([]);
+      return;
+    }
+    window.api.wordList(currentVideoPath).then(setWords);
+  }, [refreshKey, currentVideoPath]);
 
   // banner 3 秒后自动消失
   useEffect(() => {
@@ -69,7 +73,7 @@ export function WordBook({ refreshKey }: { refreshKey: number }) {
     if (!w.id) return;
     const ok = window.confirm(`确定要从生词本中删除「${w.word}」吗?\n该操作无法撤销。`);
     if (!ok) return;
-    await window.api.wordDelete(w.id);
+    await window.api.wordDelete(w.id, w.bucketKey);
     setWords((s) => s.filter((x) => x.id !== w.id));
   };
 
@@ -145,7 +149,7 @@ export function WordBook({ refreshKey }: { refreshKey: number }) {
           [exp.pos, exp.meaning].filter(Boolean).join(' ').trim() ||
           exp.contextual,
       };
-      const updated = await window.api.wordUpdate(w.id, patch);
+      const updated = await window.api.wordUpdate(w.id, patch, w.bucketKey);
       if (updated) {
         setWords((s) => s.map((x) => (x.id === w.id ? updated : x)));
       }
@@ -159,7 +163,7 @@ export function WordBook({ refreshKey }: { refreshKey: number }) {
   if (!words.length) {
     return (
       <div className="word-list" style={{ color: 'var(--muted)', padding: 16 }}>
-        生词本为空。在字幕上点单词 → 加入生词本。
+        {currentVideoPath ? '当前视频的生词本为空。在字幕上点单词 → 加入生词本。' : '请先打开一个视频，再查看它的生词本。'}
       </div>
     );
   }

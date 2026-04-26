@@ -4,6 +4,8 @@ import { app } from 'electron';
 
 export interface WordEntry {
   id?: number;
+  /** 生词来自哪个存储桶(内部定位字段,前端不展示) */
+  bucketKey?: string;
   word: string;
   context?: string;
   translation?: string;
@@ -24,9 +26,35 @@ interface DbData {
   nextId: number;
 }
 
-let cache: DbData | null = null;
-let dbFile = '';
 export const WORD_ALREADY_EXISTS = 'WORD_ALREADY_EXISTS';
+const LEGACY_DB_FILE = 'video-learner.json';
+
+function userDataDir(): string {
+  const dir = app.getPath('userData');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function legacyDbFilePath(): string {
+  return path.join(userDataDir(), LEGACY_DB_FILE);
+}
+
+function wordBookFilePathForVideo(videoPath: string): string {
+  const dir = path.dirname(videoPath);
+  const base = path.basename(videoPath);
+  return path.join(dir, `.${base}.wordbook.json`);
+}
+
+function ensureParentDir(file: string) {
+  const dir = path.dirname(file);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
+function cleanWordEntry(entry: WordEntry): WordEntry {
+  const next = { ...entry };
+  delete next.bucketKey;
+  return next;
+}
 
 function normalizeWord(word?: string): string {
   return (word || '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -82,37 +110,54 @@ function dedupeWords(words: WordEntry[]): { words: WordEntry[]; changed: boolean
   };
 }
 
-function ensureLoaded(): DbData {
-  if (cache) return cache;
-  const dir = app.getPath('userData');
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  dbFile = path.join(dir, 'video-learner.json');
-  if (fs.existsSync(dbFile)) {
+function readDbFile(file: string): DbData {
+  if (fs.existsSync(file)) {
     try {
-      cache = JSON.parse(fs.readFileSync(dbFile, 'utf-8')) as DbData;
+      const cache = JSON.parse(fs.readFileSync(file, 'utf-8')) as DbData;
+      if (!cache.words) cache.words = [];
+      if (!cache.nextId) cache.nextId = 1;
+      const deduped = dedupeWords(cache.words);
+      if (deduped.changed) {
+        cache.words = deduped.words.map(cleanWordEntry);
+        writeDbFile(file, cache);
+      }
+      return cache;
     } catch {
-      cache = { words: [], nextId: 1 };
+      return { words: [], nextId: 1 };
     }
-  } else {
-    cache = { words: [], nextId: 1 };
   }
-  if (!cache.words) cache.words = [];
-  if (!cache.nextId) cache.nextId = 1;
-  const deduped = dedupeWords(cache.words);
-  if (deduped.changed) {
-    cache.words = deduped.words;
-    flush();
-  }
-  return cache;
+  return { words: [], nextId: 1 };
 }
 
-function flush() {
-  if (!cache) return;
-  fs.writeFileSync(dbFile, JSON.stringify(cache, null, 2), 'utf-8');
+function writeDbFile(file: string, data: DbData) {
+  ensureParentDir(file);
+  const payload: DbData = {
+    nextId: data.nextId || 1,
+    words: (data.words || []).map(cleanWordEntry),
+  };
+  fs.writeFileSync(file, JSON.stringify(payload, null, 2), 'utf-8');
+}
+
+function resolveBucketFile(videoPath?: string): string {
+  if (videoPath) return wordBookFilePathForVideo(videoPath);
+  return legacyDbFilePath();
+}
+
+function attachBucketKey(words: WordEntry[], file: string): WordEntry[] {
+  return words.map((word) => ({ ...word, bucketKey: file }));
+}
+
+function findBucketFileById(id: number): string | null {
+  for (const file of [path.resolve(legacyDbFilePath())]) {
+    const data = readDbFile(file);
+    if (data.words.some((w) => w.id === id)) return file;
+  }
+  return null;
 }
 
 export function addWord(entry: WordEntry): WordEntry {
-  const d = ensureLoaded();
+  const file = path.resolve(resolveBucketFile(entry.videoPath));
+  const d = readDbFile(file);
   const normalizedWord = normalizeWord(entry.word);
   const existing = d.words.find((w) => normalizeWord(w.word) === normalizedWord);
   if (existing) {
@@ -127,34 +172,48 @@ export function addWord(entry: WordEntry): WordEntry {
     id: d.nextId++,
     createdAt: now,
   };
-  d.words.unshift(newEntry);
-  flush();
-  return newEntry;
+  d.words.unshift(cleanWordEntry(newEntry));
+  writeDbFile(file, d);
+  return { ...newEntry, bucketKey: file };
 }
 
-export function listWords(): WordEntry[] {
-  const d = ensureLoaded();
-  const deduped = dedupeWords(d.words);
-  if (deduped.changed) {
-    d.words = deduped.words;
-    flush();
-  }
-  return [...d.words];
+export function listWords(videoPath?: string): WordEntry[] {
+  if (!videoPath) return [];
+
+  const scopedFile = path.resolve(wordBookFilePathForVideo(videoPath));
+  const currentVideoWords = attachBucketKey(readDbFile(scopedFile).words, scopedFile);
+
+  const legacyFile = path.resolve(legacyDbFilePath());
+  const legacyWords = attachBucketKey(readDbFile(legacyFile).words, legacyFile).filter(
+    (word) => word.videoPath === videoPath
+  );
+
+  const deduped = dedupeWords([...currentVideoWords, ...legacyWords]);
+  return deduped.words.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 }
 
-export function deleteWord(id: number): void {
-  const d = ensureLoaded();
+export function deleteWord(id: number, bucketKey?: string): void {
+  const file = bucketKey ? path.resolve(bucketKey) : findBucketFileById(id);
+  if (!file) return;
+  const d = readDbFile(file);
   d.words = d.words.filter((w) => w.id !== id);
-  flush();
+  writeDbFile(file, d);
 }
 
-export function updateWord(id: number, patch: Partial<WordEntry>): WordEntry | null {
-  const d = ensureLoaded();
+export function updateWord(id: number, patch: Partial<WordEntry>, bucketKey?: string): WordEntry | null {
+  const file = bucketKey ? path.resolve(bucketKey) : findBucketFileById(id);
+  if (!file) return null;
+  const d = readDbFile(file);
   const idx = d.words.findIndex((w) => w.id === id);
   if (idx < 0) return null;
   // id/createdAt 不允许被覆盖,其它字段浅合并
-  const merged: WordEntry = { ...d.words[idx], ...patch, id: d.words[idx].id, createdAt: d.words[idx].createdAt };
-  d.words[idx] = merged;
-  flush();
-  return merged;
+  const merged: WordEntry = {
+    ...d.words[idx],
+    ...cleanWordEntry(patch),
+    id: d.words[idx].id,
+    createdAt: d.words[idx].createdAt,
+  };
+  d.words[idx] = cleanWordEntry(merged);
+  writeDbFile(file, d);
+  return { ...merged, bucketKey: file };
 }

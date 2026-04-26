@@ -80,6 +80,7 @@ export interface PipelineState {
 
 export interface WordEntry {
   id?: number;
+  bucketKey?: string;
   word: string;
   context?: string;
   translation?: string;
@@ -192,10 +193,10 @@ declare global {
       saveSubtitle: (videoPath: string, cues: SubtitleCue[], suffix: string) => Promise<string>;
       translateSubtitle: (cues: SubtitleCue[], target: string) => Promise<SubtitleCue[]>;
       wordAdd: (entry: WordEntry) => Promise<WordEntry>;
-      wordList: () => Promise<WordEntry[]>;
-      wordDelete: (id: number) => Promise<boolean>;
+      wordList: (videoPath?: string) => Promise<WordEntry[]>;
+      wordDelete: (id: number, bucketKey?: string) => Promise<boolean>;
       wordExplain: (word: string, context: string) => Promise<WordExplanation>;
-      wordUpdate: (id: number, patch: Partial<WordEntry>) => Promise<WordEntry | null>;
+      wordUpdate: (id: number, patch: Partial<WordEntry>, bucketKey?: string) => Promise<WordEntry | null>;
       ttsSynthesize: (opts: {
         text: string;
         voice?: string;
