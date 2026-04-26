@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
+import { SubtitleCue } from './subtitle';
+import { synthesizeSpeech } from './tts';
 
 // 使用系统 ffmpeg（用户机器必须安装 ffmpeg，或把 ffmpeg 静态包放到 resources 下）
 // 这里优先读环境变量 FFMPEG_PATH，然后回退到系统 PATH
@@ -365,6 +367,18 @@ export interface VideoSplitResult {
   files: string[];
 }
 
+export interface ExportedVideoSet {
+  outputDir: string;
+  plainVideoPath: string;
+  englishSubtitleVideoPath: string;
+  bilingualSubtitleVideoPath: string;
+}
+
+export interface DubbedVideoResult {
+  outputDir: string;
+  dubbedVideoPath: string;
+}
+
 /**
  * 按固定时长把视频切成多段。用 ffmpeg 的 segment muxer + `-c copy`,
  * 不重新编码,速度快;实际切点会落在最近的关键帧上,所以段长是近似 10 分钟。
@@ -434,6 +448,155 @@ export async function splitVideoByDuration(opts: VideoSplitOptions): Promise<Vid
   return { outputDir, files };
 }
 
+export interface ExportStudyVideosOptions {
+  videoPath: string;
+  cues: SubtitleCue[];
+  outputDir?: string;
+  onProgress?: (percent: number, message: string) => void;
+}
+
+export async function exportStudyVideos(opts: ExportStudyVideosOptions): Promise<ExportedVideoSet> {
+  const { videoPath, cues, onProgress } = opts;
+  if (!fs.existsSync(videoPath)) throw new Error(`视频不存在: ${videoPath}`);
+  if (!cues.length) throw new Error('没有可导出的字幕');
+  if (!cues.some((c) => c.translation?.trim())) {
+    throw new Error('请先完成翻译输出，再导出双语字幕视频');
+  }
+
+  const dir = path.dirname(videoPath);
+  const name = path.parse(videoPath).name;
+  const outputDir = opts.outputDir || path.join(dir, `${name}.exports`);
+  fs.mkdirSync(outputDir, { recursive: true });
+
+  const plainVideoPath = path.join(outputDir, `${name}.plain.mp4`);
+  const englishSubtitleVideoPath = path.join(outputDir, `${name}.english-subtitles.mp4`);
+  const bilingualSubtitleVideoPath = path.join(outputDir, `${name}.bilingual-subtitles.mp4`);
+  const englishAssPath = path.join(outputDir, `.${name}.english.export.ass`);
+  const bilingualAssPath = path.join(outputDir, `.${name}.bilingual.export.ass`);
+
+  fs.writeFileSync(englishAssPath, cuesToStyledAss(cues, 'english'), 'utf-8');
+  fs.writeFileSync(bilingualAssPath, cuesToStyledAss(cues, 'bilingual'), 'utf-8');
+
+  try {
+    onProgress?.(0, '导出 1/3：生成无字幕视频');
+    await transcodeVideo(videoPath, plainVideoPath);
+    onProgress?.(34, '导出 2/3：烧录英文字幕');
+    await transcodeVideo(videoPath, englishSubtitleVideoPath, englishAssPath);
+    onProgress?.(67, '导出 3/3：烧录中英文字幕');
+    await transcodeVideo(videoPath, bilingualSubtitleVideoPath, bilingualAssPath);
+    onProgress?.(100, '三种视频导出完成');
+
+    return {
+      outputDir,
+      plainVideoPath,
+      englishSubtitleVideoPath,
+      bilingualSubtitleVideoPath,
+    };
+  } finally {
+    safeUnlink(englishAssPath);
+    safeUnlink(bilingualAssPath);
+  }
+}
+
+export interface ExportDubbedVideoOptions {
+  videoPath: string;
+  cues: SubtitleCue[];
+  outputDir?: string;
+  onProgress?: (percent: number, message: string) => void;
+}
+
+export async function exportChineseDubbedVideo(
+  opts: ExportDubbedVideoOptions
+): Promise<DubbedVideoResult> {
+  const { videoPath, cues, onProgress } = opts;
+  if (!fs.existsSync(videoPath)) throw new Error(`视频不存在: ${videoPath}`);
+  if (!cues.length) throw new Error('没有可导出的字幕');
+
+  const translatedCues = cues.filter((cue) => cue.translation?.trim());
+  if (!translatedCues.length) {
+    throw new Error('请先完成翻译输出，再导出中文配音视频');
+  }
+
+  const dir = path.dirname(videoPath);
+  const name = path.parse(videoPath).name;
+  const outputDir = opts.outputDir || path.join(dir, `${name}.exports`);
+  const tempDir = path.join(outputDir, `.${name}.dub-tmp`);
+  fs.mkdirSync(outputDir, { recursive: true });
+  fs.rmSync(tempDir, { recursive: true, force: true });
+  fs.mkdirSync(tempDir, { recursive: true });
+
+  const dubbedAudioPath = path.join(tempDir, `${name}.dubbed-track.m4a`);
+  const concatListPath = path.join(tempDir, 'concat.txt');
+  const bilingualAssPath = path.join(tempDir, `.${name}.dubbed.bilingual.export.ass`);
+  const dubbedVideoPath = path.join(outputDir, `${name}.chinese-dubbed.mp4`);
+  const totalDurationSec = await getDuration(videoPath);
+
+  try {
+    fs.writeFileSync(bilingualAssPath, cuesToStyledAss(cues, 'bilingual'), 'utf-8');
+
+    const concatParts: string[] = [];
+    let cursorMs = 0;
+    let partIndex = 0;
+
+    for (let i = 0; i < translatedCues.length; i++) {
+      const cue = translatedCues[i];
+      const targetText = cue.translation!.trim();
+      const cueStartMs = Math.max(cursorMs, Math.max(0, Math.round(cue.startMs)));
+      const cueEndMs = Math.max(cueStartMs + 1, Math.round(cue.endMs));
+      const gapMs = cueStartMs - cursorMs;
+
+      if (gapMs > 0) {
+        const gapPath = path.join(tempDir, `part_${String(partIndex).padStart(4, '0')}_gap.wav`);
+        await createSilenceAudio(gapPath, gapMs / 1000);
+        concatParts.push(gapPath);
+        partIndex++;
+      }
+
+      onProgress?.(
+        Math.round((i / Math.max(1, translatedCues.length)) * 80),
+        `生成中文配音 ${i + 1}/${translatedCues.length}`
+      );
+
+      const tts = await synthesizeSpeech({
+        text: targetText,
+        language: 'zh',
+      });
+      const rawClipPath = path.join(tempDir, `tts_${String(i).padStart(4, '0')}${extFromMime(tts.mime)}`);
+      fs.writeFileSync(rawClipPath, Buffer.from(tts.dataBase64, 'base64'));
+
+      const fittedPath = path.join(tempDir, `part_${String(partIndex).padStart(4, '0')}_voice.wav`);
+      const slotDurationSec = Math.max(0.1, (cueEndMs - cueStartMs) / 1000);
+      await fitAudioToDuration(rawClipPath, fittedPath, slotDurationSec);
+      concatParts.push(fittedPath);
+      partIndex++;
+      cursorMs = cueEndMs;
+    }
+
+    const remainingMs = Math.max(0, Math.round(totalDurationSec * 1000) - cursorMs);
+    if (remainingMs > 0) {
+      const tailPath = path.join(tempDir, `part_${String(partIndex).padStart(4, '0')}_tail.wav`);
+      await createSilenceAudio(tailPath, remainingMs / 1000);
+      concatParts.push(tailPath);
+    }
+
+    fs.writeFileSync(
+      concatListPath,
+      concatParts.map((filePath) => `file '${escapeConcatPath(filePath)}'`).join('\n'),
+      'utf-8'
+    );
+
+    onProgress?.(85, '拼接中文配音音轨');
+    await concatAudioFiles(concatListPath, dubbedAudioPath);
+    onProgress?.(95, '合成中文配音视频并烧录中英文字幕');
+    await muxVideoWithAudio(videoPath, dubbedAudioPath, dubbedVideoPath, bilingualAssPath);
+    onProgress?.(100, '中文配音视频导出完成（含中英文字幕）');
+
+    return { outputDir, dubbedVideoPath };
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
 /** 从视频里抽一段 [startSec, endSec) 的音频到 WAV */
 function extractRange(
   videoPath: string,
@@ -473,6 +636,266 @@ function extractRange(
     ff.on('close', (code) => {
       if (code === 0) resolve();
       else reject(new Error(`ffmpeg 退出码 ${code}`));
+    });
+  });
+}
+
+function transcodeVideo(
+  inputPath: string,
+  outputPath: string,
+  subtitlePath?: string
+): Promise<void> {
+  const args = [
+    '-y',
+    '-nostdin',
+    '-i', inputPath,
+  ];
+
+  if (subtitlePath) {
+    args.push('-vf', buildSubtitleFilter(subtitlePath));
+  }
+
+  args.push(
+    '-c:v', 'libx264',
+    '-preset', 'veryfast',
+    '-crf', '20',
+    '-c:a', 'aac',
+    '-b:a', '192k',
+    '-movflags', '+faststart',
+    outputPath
+  );
+
+  return new Promise<void>((resolve, reject) => {
+    const ff = spawn(getFfmpegPath(), args);
+    let stderr = '';
+    ff.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    ff.on('error', reject);
+    ff.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`ffmpeg 导出失败(退出码 ${code}): ${lastLogLine(stderr)}`));
+    });
+  });
+}
+
+function fitAudioToDuration(
+  inputPath: string,
+  outputPath: string,
+  targetDurationSec: number
+): Promise<void> {
+  return (async () => {
+    const clipDurationSec = await getDuration(inputPath);
+    const filters: string[] = [];
+
+    if (clipDurationSec > 0 && clipDurationSec > targetDurationSec * 1.02) {
+      const speed = clipDurationSec / targetDurationSec;
+      filters.push(...buildAtempoFilters(speed));
+    }
+
+    filters.push('apad', `atrim=0:${targetDurationSec.toFixed(3)}`);
+
+    const args = [
+      '-y',
+      '-nostdin',
+      '-i', inputPath,
+      '-vn',
+      '-ac', '1',
+      '-ar', '24000',
+      '-c:a', 'pcm_s16le',
+      '-af', filters.join(','),
+      outputPath,
+    ];
+
+    await runFfmpeg(args, '音频时长适配失败');
+  })();
+}
+
+function createSilenceAudio(outputPath: string, durationSec: number): Promise<void> {
+  const safeDuration = Math.max(0.01, durationSec);
+  return runFfmpeg(
+    [
+      '-y',
+      '-nostdin',
+      '-f', 'lavfi',
+      '-i', `anullsrc=channel_layout=mono:sample_rate=24000`,
+      '-t', safeDuration.toFixed(3),
+      '-c:a', 'pcm_s16le',
+      outputPath,
+    ],
+    '生成静音音频失败'
+  );
+}
+
+function concatAudioFiles(concatListPath: string, outputPath: string): Promise<void> {
+  return runFfmpeg(
+    [
+      '-y',
+      '-nostdin',
+      '-f', 'concat',
+      '-safe', '0',
+      '-i', concatListPath,
+      '-c:a', 'aac',
+      '-b:a', '192k',
+      outputPath,
+    ],
+    '拼接配音音轨失败'
+  );
+}
+
+function muxVideoWithAudio(
+  videoPath: string,
+  audioPath: string,
+  outputPath: string,
+  subtitlePath?: string
+): Promise<void> {
+  const args = [
+    '-y',
+    '-nostdin',
+    '-i', videoPath,
+    '-i', audioPath,
+  ];
+
+  if (subtitlePath) {
+    args.push('-vf', buildSubtitleFilter(subtitlePath));
+  }
+
+  args.push(
+    '-map', '0:v:0',
+    '-map', '1:a:0',
+    '-c:v', 'libx264',
+    '-preset', 'veryfast',
+    '-crf', '20',
+    '-c:a', 'aac',
+    '-b:a', '192k',
+    '-movflags', '+faststart',
+    '-shortest',
+    outputPath
+  );
+
+  return runFfmpeg(args, '合成配音视频失败');
+}
+
+function buildSubtitleFilter(subtitlePath: string): string {
+  const normalized = subtitlePath
+    .replace(/\\/g, '/')
+    .replace(/:/g, '\\:')
+    .replace(/'/g, "\\\\'");
+  if (subtitlePath.toLowerCase().endsWith('.ass')) {
+    return `ass='${normalized}'`;
+  }
+  return `subtitles='${normalized}':force_style='FontName=Arial,FontSize=18,Outline=2,Shadow=0,MarginV=28'`;
+}
+
+type ExportSubtitleMode = 'english' | 'bilingual';
+
+function cuesToStyledAss(cues: SubtitleCue[], mode: ExportSubtitleMode): string {
+  const lines = [
+    '[Script Info]',
+    'ScriptType: v4.00+',
+    'WrapStyle: 2',
+    'ScaledBorderAndShadow: yes',
+    'PlayResX: 1920',
+    'PlayResY: 1080',
+    '',
+    '[V4+ Styles]',
+    'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
+    // 参考当前播放器: 底部居中、黑色半透明底、英文偏绿色、中文偏金黄。
+    'Style: ExportEN,Arial,28,&H00A8FFB8,&H00A8FFB8,&H00000000,&H7A000000,1,0,0,0,100,100,0,0,4,0,0,2,220,220,134,1',
+    'Style: ExportZH,Arial,24,&H007AD2FF,&H007AD2FF,&H00000000,&H7A000000,1,0,0,0,100,100,0,0,4,0,0,2,260,260,78,1',
+    '',
+    '[Events]',
+    'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
+  ];
+
+  for (const cue of cues) {
+    const start = msToAssTime(cue.startMs);
+    const end = msToAssTime(cue.endMs);
+    const enText = escapeAssText(cue.text);
+    const zhText = escapeAssText(cue.translation || '');
+
+    if (enText) {
+      lines.push(`Dialogue: 0,${start},${end},ExportEN,,0,0,0,,${enText}`);
+    }
+    if (mode === 'bilingual' && zhText) {
+      lines.push(`Dialogue: 0,${start},${end},ExportZH,,0,0,0,,${zhText}`);
+    }
+  }
+
+  return `${lines.join('\n')}\n`;
+}
+
+function msToAssTime(ms: number): string {
+  const safeMs = Math.max(0, Math.round(ms));
+  const h = Math.floor(safeMs / 3600000);
+  const m = Math.floor((safeMs % 3600000) / 60000);
+  const s = Math.floor((safeMs % 60000) / 1000);
+  const cs = Math.floor((safeMs % 1000) / 10);
+  return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
+}
+
+function escapeAssText(text: string): string {
+  return text
+    .replace(/\\/g, '\\\\')
+    .replace(/\{/g, '\\{')
+    .replace(/\}/g, '\\}')
+    .replace(/\r\n|\r|\n/g, '\\N');
+}
+
+function lastLogLine(text: string): string {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return lines.at(-1) || '未知错误';
+}
+
+function safeUnlink(filePath: string) {
+  try {
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  } catch (err) {
+    console.warn('删除临时字幕文件失败:', filePath, err);
+  }
+}
+
+function buildAtempoFilters(speed: number): string[] {
+  const filters: string[] = [];
+  let remaining = speed;
+  while (remaining > 2.0) {
+    filters.push('atempo=2.0');
+    remaining /= 2.0;
+  }
+  while (remaining < 0.5) {
+    filters.push('atempo=0.5');
+    remaining /= 0.5;
+  }
+  filters.push(`atempo=${remaining.toFixed(4)}`);
+  return filters;
+}
+
+function extFromMime(mime: string): string {
+  if (mime.includes('wav')) return '.wav';
+  if (mime.includes('ogg')) return '.ogg';
+  if (mime.includes('flac')) return '.flac';
+  if (mime.includes('mp4')) return '.m4a';
+  return '.mp3';
+}
+
+function escapeConcatPath(filePath: string): string {
+  return filePath.replace(/'/g, `'\\''`);
+}
+
+function runFfmpeg(args: string[], errorPrefix: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const ff = spawn(getFfmpegPath(), args);
+    let stderr = '';
+    ff.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    ff.on('error', reject);
+    ff.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`${errorPrefix}: ${lastLogLine(stderr)} (退出码 ${code})`));
     });
   });
 }

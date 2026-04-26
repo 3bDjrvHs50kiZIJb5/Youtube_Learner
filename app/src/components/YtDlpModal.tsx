@@ -39,6 +39,23 @@ function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
+function extractVideoId(rawUrl: string): string {
+  const value = rawUrl.trim();
+  if (!value) return '';
+  try {
+    const url = new URL(value);
+    const v = url.searchParams.get('v')?.trim();
+    if (v) return v;
+    if ((url.hostname === 'youtu.be' || url.hostname.endsWith('.youtu.be')) && url.pathname !== '/') {
+      return url.pathname.replace(/^\/+/, '');
+    }
+  } catch {
+    // ignore
+  }
+  const match = value.match(/[?&]v=([^&]+)/);
+  return match?.[1]?.trim() || '';
+}
+
 export function YtDlpModal({ onClose }: { onClose: () => void }) {
   const [url, setUrl] = useState('https://www.youtube.com/watch?v=tFsETEP01k8');
   const [browser, setBrowser] = useState<Browser>('chrome');
@@ -47,6 +64,7 @@ export function YtDlpModal({ onClose }: { onClose: () => void }) {
   const [audioOnly, setAudioOnly] = useState(false);
   const [codec, setCodec] = useState<CodecPreset>('vp9');
   const [copied, setCopied] = useState(false);
+  const [launching, setLaunching] = useState(false);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -55,6 +73,8 @@ export function YtDlpModal({ onClose }: { onClose: () => void }) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+
+  const videoId = useMemo(() => extractVideoId(url), [url]);
 
   const command = useMemo(() => {
     const parts = ['yt-dlp'];
@@ -70,22 +90,35 @@ export function YtDlpModal({ onClose }: { onClose: () => void }) {
     if (subs) {
       parts.push('--write-subs', '--write-auto-subs', '--sub-langs', 'en,zh-Hans');
     }
-    if (outDir.trim()) {
-      parts.push('-P', shellQuote(outDir.trim()));
+    const effectiveOutDir = outDir.trim() || (videoId ? `~/Downloads/${videoId}` : '');
+    if (effectiveOutDir) {
+      parts.push('-P', shellQuote(effectiveOutDir));
     }
     parts.push(shellQuote(url.trim()));
     return parts.join(' ');
-  }, [url, browser, outDir, subs, audioOnly, codec]);
+  }, [url, browser, outDir, subs, audioOnly, codec, videoId]);
 
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(command);
+      setLaunching(true);
+      const result = await window.api.ytDlpLaunchDownload({
+        url,
+        browser,
+        subs,
+        audioOnly,
+        codec,
+        outDir: outDir.trim() || undefined,
+      });
+      await navigator.clipboard.writeText(result.command);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
+      onClose();
     } catch {
       // 兜底:选中再让用户手动 Ctrl+C
       const ta = document.getElementById('ytdlp-cmd') as HTMLTextAreaElement | null;
       ta?.select();
+    } finally {
+      setLaunching(false);
     }
   };
 
@@ -99,7 +132,7 @@ export function YtDlpModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
         <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
-          使用浏览器 Cookie 下载,避免登录/地区限制。生成命令后在终端执行即可。
+          使用浏览器 Cookie 下载,避免登录/地区限制。点“复制命令”后会自动在下载目录建文件夹并打开终端开始下载。
         </div>
 
         <div className="field">
@@ -142,8 +175,14 @@ export function YtDlpModal({ onClose }: { onClose: () => void }) {
           <input
             value={outDir}
             onChange={(e) => setOutDir(e.target.value)}
-            placeholder="如 ~/Movies/yt 留空则下载到当前目录"
+            placeholder="留空则自动下载到 ~/Downloads/视频ID"
           />
+        </div>
+
+        <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
+          {videoId
+            ? `本次会自动建文件夹：${outDir.trim() || `~/Downloads/${videoId}`}`
+            : '请输入包含 v= 的 YouTube 链接'}
         </div>
 
         <div style={{ display: 'flex', gap: 16, marginBottom: 12, fontSize: 13 }}>
@@ -181,8 +220,8 @@ export function YtDlpModal({ onClose }: { onClose: () => void }) {
 
         <div className="footer">
           <button onClick={onClose}>关闭</button>
-          <button className="primary" onClick={copy}>
-            {copied ? '已复制 ✓' : '复制命令'}
+          <button className="primary" onClick={copy} disabled={launching || !url.trim()}>
+            {launching ? '启动下载中…' : copied ? '已复制 ✓' : '复制命令'}
           </button>
         </div>
       </div>

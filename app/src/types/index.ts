@@ -27,6 +27,24 @@ export interface UploadedSegment extends AudioSegment {
   objectKey: string;
 }
 
+export interface ExportedVideoSet {
+  outputDir: string;
+  plainVideoPath: string;
+  englishSubtitleVideoPath: string;
+  bilingualSubtitleVideoPath: string;
+}
+
+export interface DubbedVideoResult {
+  outputDir: string;
+  dubbedVideoPath: string;
+}
+
+export interface YtDlpLaunchResult {
+  command: string;
+  targetDir: string;
+  videoId: string;
+}
+
 export type StepStatus = 'idle' | 'running' | 'done' | 'error';
 
 export type WorkerStatus = 'idle' | 'submitting' | 'pending' | 'running' | 'fetching' | 'done' | 'error';
@@ -126,6 +144,22 @@ declare global {
         videoPath: string,
         segmentMinutes: number
       ) => Promise<{ outputDir: string; files: string[] }>;
+      exportStudyVideos: (
+        videoPath: string,
+        cues: SubtitleCue[]
+      ) => Promise<ExportedVideoSet>;
+      exportChineseDubbedVideo: (
+        videoPath: string,
+        cues: SubtitleCue[]
+      ) => Promise<DubbedVideoResult>;
+      ytDlpLaunchDownload: (options: {
+        url: string;
+        browser: string;
+        subs: boolean;
+        audioOnly: boolean;
+        codec: string;
+        outDir?: string;
+      }) => Promise<YtDlpLaunchResult>;
       audioSplit: (
         videoPath: string,
         segmentSec?: number,

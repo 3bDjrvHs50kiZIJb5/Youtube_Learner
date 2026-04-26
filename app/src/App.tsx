@@ -47,6 +47,8 @@ export default function App() {
   const [splitOpen, setSplitOpen] = useState(false);
   const [wordRefresh, setWordRefresh] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
+  const [studyVideoExported, setStudyVideoExported] = useState(false);
+  const [dubbedVideoExported, setDubbedVideoExported] = useState(false);
 
   useEffect(() => {
     const offs = [
@@ -78,6 +80,8 @@ export default function App() {
     async (p: string) => {
       const url = await window.api.toMediaUrl(p);
       setVideo(p, url);
+      setStudyVideoExported(false);
+      setDubbedVideoExported(false);
 
       // 恢复上次的 pipeline 状态
       const state = await window.api.stateLoad(p);
@@ -210,6 +214,8 @@ export default function App() {
   const doTranscribe = async () => {
     if (!videoPath || !uploaded.length) return;
     setBusy(true);
+    setStudyVideoExported(false);
+    setDubbedVideoExported(false);
     setStep('asr', 'running');
     setStep('translate', 'idle');
     resetWorkerPanel('asr');
@@ -240,6 +246,8 @@ export default function App() {
 
     const url = await window.api.toMediaUrl(path);
     setVideo(path, url);
+    setStudyVideoExported(false);
+    setDubbedVideoExported(false);
 
     // 恢复上次的 pipeline 状态,作为跳过已完成步骤的依据
     const state = await window.api.stateLoad(path);
@@ -326,6 +334,8 @@ export default function App() {
   const doTranslate = async () => {
     if (!videoPath || !cues.length) return;
     setBusy(true);
+    setStudyVideoExported(false);
+    setDubbedVideoExported(false);
     setStep('translate', 'running');
     resetWorkerPanel('translate');
     setTab('progress');
@@ -341,6 +351,48 @@ export default function App() {
     } catch (e: any) {
       setStep('translate', 'error');
       setToast(`翻译失败: ${e?.message || e}`);
+    } finally {
+      setBusy(false);
+      setTimeout(() => setProgress(null), 4000);
+    }
+  };
+
+  const doExportVideos = async () => {
+    if (!videoPath || !cues.length || steps.translate !== 'done') return;
+    if (typeof window.api.exportStudyVideos !== 'function') {
+      setToast('当前窗口还是旧版本，请关闭应用后重新启动一次');
+      return;
+    }
+    setBusy(true);
+    setTab('progress');
+    try {
+      const result = await window.api.exportStudyVideos(videoPath, cues);
+      setStudyVideoExported(true);
+      setToast(`三种视频已导出到 ${result.outputDir.split('/').pop()}`);
+      setTab('cue');
+    } catch (e: any) {
+      setToast(`视频导出失败: ${e?.message || e}`);
+    } finally {
+      setBusy(false);
+      setTimeout(() => setProgress(null), 4000);
+    }
+  };
+
+  const doExportChineseDubbed = async () => {
+    if (!videoPath || !cues.length || steps.translate !== 'done') return;
+    if (typeof window.api.exportChineseDubbedVideo !== 'function') {
+      setToast('当前窗口还是旧版本，请关闭应用后重新启动一次');
+      return;
+    }
+    setBusy(true);
+    setTab('progress');
+    try {
+      const result = await window.api.exportChineseDubbedVideo(videoPath, cues);
+      setDubbedVideoExported(true);
+      setToast(`中文配音视频已导出到 ${result.outputDir.split('/').pop()}`);
+      setTab('cue');
+    } catch (e: any) {
+      setToast(`中文配音导出失败: ${e?.message || e}`);
     } finally {
       setBusy(false);
       setTimeout(() => setProgress(null), 4000);
@@ -395,6 +447,7 @@ export default function App() {
   const canUpload = !!segments.length && !busy && steps.upload !== 'done';
   const canTranscribe = !!uploaded.length && !busy && steps.asr !== 'done';
   const canTranslate = !!cues.length && !busy && steps.translate !== 'done';
+  const canExportVideos = !!videoPath && !!cues.length && !busy && steps.translate === 'done';
 
   return (
     <div className="app">
@@ -473,6 +526,40 @@ export default function App() {
           <StepIcon status={steps.translate} />
           <span className="num">⑤</span> 翻译输出
           {steps.translate === 'done' && <span className="badge">已翻译</span>}
+        </button>
+
+        <button
+          className={`step-btn ${studyVideoExported ? 'step-done' : ''}`}
+          onClick={doExportVideos}
+          disabled={!canExportVideos}
+          title={
+            !canExportVideos
+              ? '请先完成翻译输出'
+              : studyVideoExported
+                ? '已导出完成，可再次点击重新导出'
+                : '一键导出无字幕、英文字幕、中英双语字幕 3 个视频'
+          }
+        >
+          {studyVideoExported && <StepIcon status="done" />}
+          视频导出
+          {studyVideoExported && <span className="badge">已导出</span>}
+        </button>
+
+        <button
+          className={`step-btn ${dubbedVideoExported ? 'step-done' : ''}`}
+          onClick={doExportChineseDubbed}
+          disabled={!canExportVideos}
+          title={
+            !canExportVideos
+              ? '请先完成翻译输出'
+              : dubbedVideoExported
+                ? '已导出完成，可再次点击重新导出'
+                : '导出中文配音版本视频'
+          }
+        >
+          {dubbedVideoExported && <StepIcon status="done" />}
+          中文配音视频
+          {dubbedVideoExported && <span className="badge">已导出</span>}
         </button>
 
         <button onClick={() => setSettingsOpen(true)}>⚙ 设置</button>

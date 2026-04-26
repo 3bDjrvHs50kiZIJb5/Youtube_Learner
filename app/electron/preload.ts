@@ -17,6 +17,12 @@ const api = {
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
   videoSplitByTime: (videoPath: string, segmentMinutes: number) =>
     ipcRenderer.invoke('video:split-by-time', videoPath, segmentMinutes),
+  exportStudyVideos: (videoPath: string, cues: unknown) =>
+    ipcRenderer.invoke('video:export-study-videos', videoPath, cues),
+  exportChineseDubbedVideo: (videoPath: string, cues: unknown) =>
+    ipcRenderer.invoke('video:export-chinese-dubbed', videoPath, cues),
+  ytDlpLaunchDownload: (options: unknown) =>
+    ipcRenderer.invoke('yt-dlp:launch-download', options),
 
   // 分步骤: 1)切分 2)上传 3)ASR 字幕 4)翻译
   audioSplit: (

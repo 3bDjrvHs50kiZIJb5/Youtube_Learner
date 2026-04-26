@@ -1,10 +1,15 @@
-import { IpcMain, dialog, BrowserWindow, screen } from 'electron';
+import { IpcMain, dialog, BrowserWindow, screen, app } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import {
   splitAudioSegments,
   splitVideoByDuration,
+  exportStudyVideos,
+  exportChineseDubbedVideo,
   AudioSegment,
+  DubbedVideoResult,
+  ExportedVideoSet,
   VideoSplitResult,
 } from '../services/ffmpeg';
 import { uploadToOss, signOssUrl } from '../services/oss';
@@ -62,6 +67,103 @@ function cleanupSegments(dirs: string[]) {
       console.warn('清理分段目录失败:', d, e);
     }
   }
+}
+
+type YtDlpBrowser = 'chrome' | 'edge' | 'safari' | 'firefox' | 'brave' | 'chromium' | 'vivaldi' | 'opera';
+type YtDlpCodecPreset = 'vp9' | 'mp4' | 'default';
+
+interface YtDlpLaunchOptions {
+  url: string;
+  browser: YtDlpBrowser;
+  subs: boolean;
+  audioOnly: boolean;
+  codec: YtDlpCodecPreset;
+  outDir?: string;
+}
+
+function shellQuote(value: string): string {
+  if (!value) return "''";
+  if (/^[a-zA-Z0-9_\-./:=@%+,]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function resolveYtDlpFormat(codec: YtDlpCodecPreset): string | null {
+  if (codec === 'vp9') {
+    return 'bestvideo[vcodec^=vp9]+bestaudio/best[ext=mp4]/best';
+  }
+  if (codec === 'mp4') {
+    return 'bv*[ext=mp4][vcodec^=avc1]+ba[ext=m4a]/b[ext=mp4]/b';
+  }
+  return null;
+}
+
+function extractYoutubeVideoId(rawUrl: string): string {
+  let value = (rawUrl || '').trim();
+  if (!value) throw new Error('请先输入视频链接');
+  try {
+    const url = new URL(value);
+    const v = url.searchParams.get('v')?.trim();
+    if (v) return safeFolderName(v);
+    if ((url.hostname === 'youtu.be' || url.hostname.endsWith('.youtu.be')) && url.pathname !== '/') {
+      return safeFolderName(url.pathname.replace(/^\/+/, ''));
+    }
+  } catch {
+    // ignore
+  }
+  const match = value.match(/[?&]v=([^&]+)/);
+  if (match?.[1]) return safeFolderName(match[1]);
+  throw new Error('没有识别到视频链接里的 v= 参数');
+}
+
+function safeFolderName(name: string): string {
+  const cleaned = name.trim().replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_');
+  return cleaned || 'youtube-video';
+}
+
+function buildYtDlpCommand(opts: YtDlpLaunchOptions, targetDir: string): string {
+  const parts = ['yt-dlp', '--cookies-from-browser', opts.browser];
+  if (opts.audioOnly) {
+    parts.push('-x', '--audio-format', 'mp3');
+  } else {
+    const format = resolveYtDlpFormat(opts.codec);
+    if (format) parts.push('-f', shellQuote(format));
+  }
+  if (opts.subs) {
+    parts.push('--write-subs', '--write-auto-subs', '--sub-langs', 'en,zh-Hans');
+  }
+  parts.push('-P', shellQuote(targetDir));
+  parts.push(shellQuote(opts.url.trim()));
+  return parts.join(' ');
+}
+
+function escapeAppleScript(text: string): string {
+  return text.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+async function openTerminalAndRun(command: string, cwd: string): Promise<void> {
+  if (process.platform !== 'darwin') {
+    throw new Error('当前只支持在 macOS 自动打开终端');
+  }
+
+  const script = [
+    'tell application "Terminal"',
+    'activate',
+    `do script "${escapeAppleScript(`cd ${shellQuote(cwd)} && ${command}`)}"`,
+    'end tell',
+  ].join('\n');
+
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn('osascript', ['-e', script]);
+    let stderr = '';
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(stderr.trim() || `osascript 退出码 ${code}`));
+    });
+  });
 }
 
 // 根据视频宽高比调整主窗口尺寸, 让"视频播放区"保持视频比例, 其他 chrome (顶栏/侧栏/控制条)
@@ -244,6 +346,76 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
     const encoded = encodeURI(withSlash).replace(/\[/g, '%5B').replace(/\]/g, '%5D');
     return `app-media://local${encoded}`;
   });
+
+  ipcMain.handle(
+    'yt-dlp:launch-download',
+    async (_e, options: YtDlpLaunchOptions) => {
+      const url = options?.url?.trim();
+      if (!url) throw new Error('请先输入视频链接');
+
+      const videoId = extractYoutubeVideoId(url);
+      const baseDir = (options?.outDir || '').trim() || app.getPath('downloads');
+      const targetDir = path.join(baseDir, videoId);
+      fs.mkdirSync(targetDir, { recursive: true });
+
+      const command = buildYtDlpCommand(
+        {
+          ...options,
+          url,
+        },
+        targetDir
+      );
+
+      await openTerminalAndRun(command, targetDir);
+      return { command, targetDir, videoId };
+    }
+  );
+
+  ipcMain.handle(
+    'video:export-study-videos',
+    async (
+      _e,
+      videoPath: string,
+      cues: SubtitleCue[]
+    ): Promise<ExportedVideoSet> => {
+      try {
+        sendProgress('export-video', '开始导出学习视频…', 0);
+        const result = await exportStudyVideos({
+          videoPath,
+          cues,
+          onProgress: (percent, message) => sendProgress('export-video', message, percent),
+        });
+        sendProgress('done', '视频导出完成', 100);
+        return result;
+      } catch (err: any) {
+        sendProgress('error', `视频导出失败: ${err?.message || err}`);
+        throw err;
+      }
+    }
+  );
+
+  ipcMain.handle(
+    'video:export-chinese-dubbed',
+    async (
+      _e,
+      videoPath: string,
+      cues: SubtitleCue[]
+    ): Promise<DubbedVideoResult> => {
+      try {
+        sendProgress('export-dubbed', '开始导出中文配音视频…', 0);
+        const result = await exportChineseDubbedVideo({
+          videoPath,
+          cues,
+          onProgress: (percent, message) => sendProgress('export-dubbed', message, percent),
+        });
+        sendProgress('done', '中文配音视频导出完成', 100);
+        return result;
+      } catch (err: any) {
+        sendProgress('error', `中文配音视频导出失败: ${err?.message || err}`);
+        throw err;
+      }
+    }
+  );
 
   // 步骤 1: 切分音频(静音感知)
   ipcMain.handle(
