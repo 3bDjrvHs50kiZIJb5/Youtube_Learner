@@ -50,7 +50,7 @@ function ensureParentDir(file: string) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
-function cleanWordEntry(entry: WordEntry): WordEntry {
+function cleanWordEntry<T extends { bucketKey?: string }>(entry: T): T {
   const next = { ...entry };
   delete next.bucketKey;
   return next;

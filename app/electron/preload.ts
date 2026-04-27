@@ -17,8 +17,8 @@ const api = {
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
   videoSplitByTime: (videoPath: string, segmentMinutes: number) =>
     ipcRenderer.invoke('video:split-by-time', videoPath, segmentMinutes),
-  exportStudyVideos: (videoPath: string, cues: unknown) =>
-    ipcRenderer.invoke('video:export-study-videos', videoPath, cues),
+  exportStudyVideos: (videoPath: string, cues: unknown, selection?: unknown) =>
+    ipcRenderer.invoke('video:export-study-videos', videoPath, cues, selection),
   exportChineseDubbedVideo: (videoPath: string, cues: unknown) =>
     ipcRenderer.invoke('video:export-chinese-dubbed', videoPath, cues),
   ytDlpLaunchDownload: (options: unknown) =>

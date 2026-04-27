@@ -109,12 +109,39 @@ function sniffAudioMime(buf: Buffer): string {
  */
 const memCache = new Map<string, TTSResult>();
 let cacheDir = '';
+const TTS_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+let lastTtsCacheCleanupAt = 0;
 
 function getCacheDir(): string {
   if (cacheDir) return cacheDir;
   cacheDir = path.join(app.getPath('userData'), 'tts-cache');
   if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
   return cacheDir;
+}
+
+function maybeCleanupExpiredDiskCache() {
+  const now = Date.now();
+  // 至少间隔 12 小时再扫一次，避免每次 TTS 都全量遍历目录。
+  if (now - lastTtsCacheCleanupAt < 12 * 60 * 60 * 1000) return;
+  lastTtsCacheCleanupAt = now;
+  try {
+    const dir = getCacheDir();
+    for (const name of fs.readdirSync(dir)) {
+      const file = path.join(dir, name);
+      try {
+        const stat = fs.statSync(file);
+        if (!stat.isFile()) continue;
+        if (now - stat.mtimeMs > TTS_CACHE_TTL_MS) {
+          fs.unlinkSync(file);
+          memCache.delete(name);
+        }
+      } catch {
+        // 单个文件清不掉就跳过
+      }
+    }
+  } catch (err) {
+    console.warn('[tts-cache] 清理过期缓存失败:', err);
+  }
 }
 
 function makeCacheKey(model: string, voice: string, language: string, text: string): string {
@@ -124,10 +151,20 @@ function makeCacheKey(model: string, voice: string, language: string, text: stri
 
 function readFromDiskCache(key: string): TTSResult | null {
   try {
+    maybeCleanupExpiredDiskCache();
     const file = path.join(getCacheDir(), key);
     if (!fs.existsSync(file)) return null;
+    const stat = fs.statSync(file);
+    if (!stat.isFile()) return null;
+    if (Date.now() - stat.mtimeMs > TTS_CACHE_TTL_MS) {
+      fs.unlinkSync(file);
+      memCache.delete(key);
+      return null;
+    }
     const buf = fs.readFileSync(file);
     if (!buf.length) return null;
+    const nowSec = Date.now() / 1000;
+    fs.utimesSync(file, nowSec, nowSec);
     return { dataBase64: buf.toString('base64'), mime: sniffAudioMime(buf) };
   } catch (err) {
     console.warn('[tts-cache] 读取磁盘缓存失败:', err);
@@ -137,6 +174,7 @@ function readFromDiskCache(key: string): TTSResult | null {
 
 function writeToDiskCache(key: string, buf: Buffer) {
   try {
+    maybeCleanupExpiredDiskCache();
     const file = path.join(getCacheDir(), key);
     fs.writeFileSync(file, buf);
   } catch (err) {

@@ -18,12 +18,12 @@ type CodecPreset = 'vp9' | 'mp4' | 'default';
 const CODEC_PRESETS: { id: CodecPreset; label: string; format?: string }[] = [
   {
     id: 'vp9',
-    label: 'VP9 + Opus (推荐,Electron 内置可播)',
+    label: 'VP9 + Opus (播放器里更容易直接播放, 但有些视频清晰度会偏低)',
     format: 'bestvideo[vcodec^=vp9]+bestaudio/best[ext=mp4]/best',
   },
   {
     id: 'mp4',
-    label: 'H.264 / MP4 (通用,体积较大)',
+    label: 'H.264 / MP4 (更通用,通常更容易拿到高清,体积较大)',
     format: 'bv*[ext=mp4][vcodec^=avc1]+ba[ext=m4a]/b[ext=mp4]/b',
   },
   {
@@ -39,21 +39,42 @@ function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
+function normalizeVideoId(value: string): string {
+  const trimmed = value.trim();
+  if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) return trimmed;
+  return '';
+}
+
 function extractVideoId(rawUrl: string): string {
   const value = rawUrl.trim();
   if (!value) return '';
+  const directId = normalizeVideoId(value);
+  if (directId) return directId;
   try {
     const url = new URL(value);
     const v = url.searchParams.get('v')?.trim();
-    if (v) return v;
-    if ((url.hostname === 'youtu.be' || url.hostname.endsWith('.youtu.be')) && url.pathname !== '/') {
-      return url.pathname.replace(/^\/+/, '');
+    const host = url.hostname.toLowerCase();
+    if (v) return normalizeVideoId(v) || v;
+    if ((host === 'youtu.be' || host.endsWith('.youtu.be')) && url.pathname !== '/') {
+      return normalizeVideoId(url.pathname.replace(/^\/+/, ''));
+    }
+    const pathMatch = url.pathname.match(/^\/(?:shorts|embed|live)\/([^/?#]+)/);
+    if (pathMatch?.[1]) {
+      return normalizeVideoId(pathMatch[1]) || pathMatch[1];
     }
   } catch {
     // ignore
   }
   const match = value.match(/[?&]v=([^&]+)/);
-  return match?.[1]?.trim() || '';
+  return normalizeVideoId(match?.[1] ?? '');
+}
+
+function sanitizeYoutubeUrl(rawUrl: string): string {
+  const value = rawUrl.trim();
+  if (!value) return '';
+  const videoId = extractVideoId(value);
+  if (videoId) return `https://www.youtube.com/watch?v=${videoId}`;
+  return value;
 }
 
 export function YtDlpModal({ onClose }: { onClose: () => void }) {
@@ -61,7 +82,7 @@ export function YtDlpModal({ onClose }: { onClose: () => void }) {
   const [browser, setBrowser] = useState<Browser>('chrome');
   const [subs, setSubs] = useState(false);
   const [audioOnly, setAudioOnly] = useState(false);
-  const [codec, setCodec] = useState<CodecPreset>('vp9');
+  const [codec, setCodec] = useState<CodecPreset>('mp4');
   const [copied, setCopied] = useState(false);
   const [launching, setLaunching] = useState(false);
 
@@ -74,6 +95,7 @@ export function YtDlpModal({ onClose }: { onClose: () => void }) {
   }, [onClose]);
 
   const videoId = useMemo(() => extractVideoId(url), [url]);
+  const sanitizedUrl = useMemo(() => sanitizeYoutubeUrl(url), [url]);
 
   const command = useMemo(() => {
     const parts = ['yt-dlp'];
@@ -92,15 +114,15 @@ export function YtDlpModal({ onClose }: { onClose: () => void }) {
     if (videoId) {
       parts.push('-P', shellQuote(`~/Downloads/${videoId}`));
     }
-    parts.push(shellQuote(url.trim()));
+    parts.push(shellQuote(sanitizedUrl));
     return parts.join(' ');
-  }, [url, browser, subs, audioOnly, codec, videoId]);
+  }, [browser, subs, audioOnly, codec, videoId, sanitizedUrl]);
 
-  const copy = async () => {
+  const runCommand = async () => {
     try {
       setLaunching(true);
       const result = await window.api.ytDlpLaunchDownload({
-        url,
+        url: sanitizedUrl,
         browser,
         subs,
         audioOnly,
@@ -129,7 +151,7 @@ export function YtDlpModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
         <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
-          使用浏览器 Cookie 下载,避免登录/地区限制。点“复制命令”后会自动在下载目录建文件夹并打开终端开始下载。
+          使用浏览器 Cookie 下载，避免登录或地区限制。点“运行命令”后会自动在下载目录建文件夹，并打开终端开始下载。
         </div>
 
         <div className="field">
@@ -137,6 +159,10 @@ export function YtDlpModal({ onClose }: { onClose: () => void }) {
           <input
             value={url}
             onChange={(e) => setUrl(e.target.value)}
+            onBlur={() => {
+              const next = sanitizeYoutubeUrl(url);
+              if (next && next !== url) setUrl(next);
+            }}
             placeholder="https://www.youtube.com/watch?v=..."
           />
         </div>
@@ -165,11 +191,19 @@ export function YtDlpModal({ onClose }: { onClose: () => void }) {
               </option>
             ))}
           </select>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6 }}>
+            说明：VP9 兼容当前播放器一些场景，但部分视频只能拿到较低清晰度；想优先下高清时，建议选 H.264 / MP4。
+          </div>
         </div>
 
         <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
           {videoId ? `本次会自动下载到：~/Downloads/${videoId}` : '请输入包含 v= 的 YouTube 链接'}
         </div>
+        {sanitizedUrl && sanitizedUrl !== url.trim() ? (
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
+            检测到链接里有多余参数，下载时会自动整理为：{sanitizedUrl}
+          </div>
+        ) : null}
 
         <div style={{ display: 'flex', gap: 16, marginBottom: 12, fontSize: 13 }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
@@ -206,8 +240,8 @@ export function YtDlpModal({ onClose }: { onClose: () => void }) {
 
         <div className="footer">
           <button onClick={onClose}>关闭</button>
-          <button className="primary" onClick={copy} disabled={launching || !url.trim()}>
-            {launching ? '启动下载中…' : copied ? '已复制 ✓' : '复制命令'}
+          <button className="primary" onClick={runCommand} disabled={launching || !url.trim()}>
+            {launching ? '启动下载中…' : copied ? '已运行 ✓' : '运行命令'}
           </button>
         </div>
       </div>

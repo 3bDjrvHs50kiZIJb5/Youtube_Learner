@@ -7,7 +7,9 @@ import { SettingsModal } from './components/SettingsModal';
 import { YtDlpModal } from './components/YtDlpModal';
 import { VideoSplitModal } from './components/VideoSplitModal';
 import { ProgressPanel } from './components/ProgressPanel';
+import { ExportVideoModal } from './components/ExportVideoModal';
 import { APP_TOAST_EVENT, AppToastDetail } from './utils/toast';
+import type { StudyVideoExportSelection } from './types';
 
 function StepIcon({ status }: { status: StepStatus }) {
   if (status === 'done') return <span style={{ color: 'var(--success)' }}>✓</span>;
@@ -45,10 +47,10 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [ytdlpOpen, setYtdlpOpen] = useState(false);
   const [splitOpen, setSplitOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const [wordRefresh, setWordRefresh] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
   const [studyVideoExported, setStudyVideoExported] = useState(false);
-  const [dubbedVideoExported, setDubbedVideoExported] = useState(false);
 
   useEffect(() => {
     const offs = [
@@ -81,7 +83,6 @@ export default function App() {
       const url = await window.api.toMediaUrl(p);
       setVideo(p, url);
       setStudyVideoExported(false);
-      setDubbedVideoExported(false);
 
       // 恢复上次的 pipeline 状态
       const state = await window.api.stateLoad(p);
@@ -215,7 +216,6 @@ export default function App() {
     if (!videoPath || !uploaded.length) return;
     setBusy(true);
     setStudyVideoExported(false);
-    setDubbedVideoExported(false);
     setStep('asr', 'running');
     setStep('translate', 'idle');
     resetWorkerPanel('asr');
@@ -247,7 +247,6 @@ export default function App() {
     const url = await window.api.toMediaUrl(path);
     setVideo(path, url);
     setStudyVideoExported(false);
-    setDubbedVideoExported(false);
 
     // 恢复上次的 pipeline 状态,作为跳过已完成步骤的依据
     const state = await window.api.stateLoad(path);
@@ -335,7 +334,6 @@ export default function App() {
     if (!videoPath || !cues.length) return;
     setBusy(true);
     setStudyVideoExported(false);
-    setDubbedVideoExported(false);
     setStep('translate', 'running');
     resetWorkerPanel('translate');
     setTab('progress');
@@ -357,7 +355,7 @@ export default function App() {
     }
   };
 
-  const doExportVideos = async () => {
+  const doExportVideos = async (selection: StudyVideoExportSelection) => {
     if (!videoPath || !cues.length || steps.translate !== 'done') return;
     if (typeof window.api.exportStudyVideos !== 'function') {
       setToast('当前窗口还是旧版本，请关闭应用后重新启动一次');
@@ -366,9 +364,16 @@ export default function App() {
     setBusy(true);
     setTab('progress');
     try {
-      const result = await window.api.exportStudyVideos(videoPath, cues);
+      setExportOpen(false);
+      const result = await window.api.exportStudyVideos(videoPath, cues, selection);
+      const exportedNames = [
+        result.plainVideoPath && '无字幕视频',
+        result.englishSubtitleVideoPath && '英文字幕视频',
+        result.bilingualSubtitleVideoPath && '中英双语字幕视频',
+        result.dubbedVideoPath && '中文配音视频',
+      ].filter(Boolean);
       setStudyVideoExported(true);
-      setToast(`三种视频已导出到 ${result.outputDir.split('/').pop()}`);
+      setToast(`${exportedNames.join('、')}已导出到 ${result.outputDir.split('/').pop()}`);
       setTab('cue');
     } catch (e: any) {
       setToast(`视频导出失败: ${e?.message || e}`);
@@ -378,25 +383,9 @@ export default function App() {
     }
   };
 
-  const doExportChineseDubbed = async () => {
-    if (!videoPath || !cues.length || steps.translate !== 'done') return;
-    if (typeof window.api.exportChineseDubbedVideo !== 'function') {
-      setToast('当前窗口还是旧版本，请关闭应用后重新启动一次');
-      return;
-    }
-    setBusy(true);
-    setTab('progress');
-    try {
-      const result = await window.api.exportChineseDubbedVideo(videoPath, cues);
-      setDubbedVideoExported(true);
-      setToast(`中文配音视频已导出到 ${result.outputDir.split('/').pop()}`);
-      setTab('cue');
-    } catch (e: any) {
-      setToast(`中文配音导出失败: ${e?.message || e}`);
-    } finally {
-      setBusy(false);
-      setTimeout(() => setProgress(null), 4000);
-    }
+  const openExportModal = () => {
+    if (!canExportVideos || busy) return;
+    setExportOpen(true);
   };
 
   const addWord = useCallback(
@@ -480,7 +469,7 @@ export default function App() {
           🚀 一键处理
         </button>
 
-        <button className="step-btn" onClick={pickVideo} disabled={busy} title="选择本地视频">
+        <button className="step-btn" onClick={pickVideo} title="选择本地视频">
           <span className="num">①</span> 打开视频
         </button>
 
@@ -530,36 +519,19 @@ export default function App() {
 
         <button
           className={`step-btn ${studyVideoExported ? 'step-done' : ''}`}
-          onClick={doExportVideos}
+          onClick={openExportModal}
           disabled={!canExportVideos}
           title={
             !canExportVideos
               ? '请先完成翻译输出'
               : studyVideoExported
                 ? '已导出完成，可再次点击重新导出'
-                : '一键导出无字幕、英文字幕、中英双语字幕 3 个视频'
+                : '先选择要导出的版本，再开始导出'
           }
         >
           {studyVideoExported && <StepIcon status="done" />}
           视频导出
           {studyVideoExported && <span className="badge">已导出</span>}
-        </button>
-
-        <button
-          className={`step-btn ${dubbedVideoExported ? 'step-done' : ''}`}
-          onClick={doExportChineseDubbed}
-          disabled={!canExportVideos}
-          title={
-            !canExportVideos
-              ? '请先完成翻译输出'
-              : dubbedVideoExported
-                ? '已导出完成，可再次点击重新导出'
-                : '导出中文配音版本视频'
-          }
-        >
-          {dubbedVideoExported && <StepIcon status="done" />}
-          中文配音视频
-          {dubbedVideoExported && <span className="badge">已导出</span>}
         </button>
 
         <button onClick={() => setSettingsOpen(true)}>⚙ 设置</button>
@@ -589,6 +561,7 @@ export default function App() {
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
       {ytdlpOpen && <YtDlpModal onClose={() => setYtdlpOpen(false)} />}
       {splitOpen && <VideoSplitModal onClose={() => setSplitOpen(false)} />}
+      {exportOpen && <ExportVideoModal onClose={() => setExportOpen(false)} onConfirm={doExportVideos} />}
 
       {(progress || toast) && (
         <div className="toast">

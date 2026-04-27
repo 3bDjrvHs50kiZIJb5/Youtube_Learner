@@ -96,27 +96,53 @@ function resolveYtDlpFormat(codec: YtDlpCodecPreset): string | null {
   return null;
 }
 
+function normalizeYoutubeVideoId(value: string): string {
+  const trimmed = value.trim();
+  if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) return trimmed;
+  return '';
+}
+
 function extractYoutubeVideoId(rawUrl: string): string {
   let value = (rawUrl || '').trim();
   if (!value) throw new Error('请先输入视频链接');
+  const directId = normalizeYoutubeVideoId(value);
+  if (directId) return safeFolderName(directId);
   try {
     const url = new URL(value);
     const v = url.searchParams.get('v')?.trim();
-    if (v) return safeFolderName(v);
-    if ((url.hostname === 'youtu.be' || url.hostname.endsWith('.youtu.be')) && url.pathname !== '/') {
-      return safeFolderName(url.pathname.replace(/^\/+/, ''));
+    const host = url.hostname.toLowerCase();
+    if (v) {
+      const normalized = normalizeYoutubeVideoId(v);
+      if (normalized) return safeFolderName(normalized);
+    }
+    if ((host === 'youtu.be' || host.endsWith('.youtu.be')) && url.pathname !== '/') {
+      const normalized = normalizeYoutubeVideoId(url.pathname.replace(/^\/+/, ''));
+      if (normalized) return safeFolderName(normalized);
+    }
+    const pathMatch = url.pathname.match(/^\/(?:shorts|embed|live)\/([^/?#]+)/);
+    if (pathMatch?.[1]) {
+      const normalized = normalizeYoutubeVideoId(pathMatch[1]);
+      if (normalized) return safeFolderName(normalized);
     }
   } catch {
     // ignore
   }
   const match = value.match(/[?&]v=([^&]+)/);
-  if (match?.[1]) return safeFolderName(match[1]);
+  const normalized = normalizeYoutubeVideoId(match?.[1] ?? '');
+  if (normalized) return safeFolderName(normalized);
   throw new Error('没有识别到视频链接里的 v= 参数');
 }
 
 function safeFolderName(name: string): string {
   const cleaned = name.trim().replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_');
   return cleaned || 'youtube-video';
+}
+
+function sanitizeYoutubeUrl(rawUrl: string): string {
+  const value = (rawUrl || '').trim();
+  if (!value) return value;
+  const videoId = extractYoutubeVideoId(value);
+  return `https://www.youtube.com/watch?v=${videoId}`;
 }
 
 function buildYtDlpCommand(opts: YtDlpLaunchOptions, targetDir: string): string {
@@ -131,7 +157,7 @@ function buildYtDlpCommand(opts: YtDlpLaunchOptions, targetDir: string): string 
     parts.push('--write-subs', '--write-auto-subs', '--sub-langs', 'en,zh-Hans');
   }
   parts.push('-P', shellQuote(targetDir));
-  parts.push(shellQuote(opts.url.trim()));
+  parts.push(shellQuote(sanitizeYoutubeUrl(opts.url)));
   return parts.join(' ');
 }
 
@@ -144,10 +170,44 @@ async function openTerminalAndRun(command: string, cwd: string): Promise<void> {
     throw new Error('当前只支持在 macOS 自动打开终端');
   }
 
+  const successFlag = path.join(
+    app.getPath('temp'),
+    `video-learner-yt-dlp-success-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  );
+  const scriptPath = path.join(
+    app.getPath('temp'),
+    `video-learner-yt-dlp-${Date.now()}-${Math.random().toString(36).slice(2)}.sh`
+  );
+  const bashScript = [
+    '#!/bin/bash',
+    `cd ${shellQuote(cwd)}`,
+    command,
+    'status=$?',
+    'if [ "$status" -eq 0 ]; then',
+    `  touch ${shellQuote(successFlag)}`,
+    '  open .',
+    'fi',
+    'exit "$status"',
+    '',
+  ].join('\n');
+  fs.writeFileSync(scriptPath, bashScript, { encoding: 'utf8', mode: 0o755 });
+  const shellCommand = `/bin/bash ${shellQuote(scriptPath)}`;
+
   const script = [
     'tell application "Terminal"',
     'activate',
-    `do script "${escapeAppleScript(`cd ${shellQuote(cwd)} && ${command}`)}"`,
+    'set downloadTab to do script ""',
+    'set downloadWindow to front window',
+    `do script "${escapeAppleScript(shellCommand)}" in downloadTab`,
+    'repeat while busy of downloadTab',
+    'delay 1',
+    'end repeat',
+    `set shouldClose to (do shell script "if [ -f ${shellQuote(successFlag)} ]; then echo yes; else echo no; fi")`,
+    'if shouldClose is "yes" then',
+    'close downloadWindow saving no',
+    `do shell script "rm -f ${shellQuote(successFlag)}"`,
+    'end if',
+    `do shell script "rm -f ${shellQuote(scriptPath)}"`,
     'end tell',
   ].join('\n');
 
@@ -352,7 +412,8 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
       const url = options?.url?.trim();
       if (!url) throw new Error('请先输入视频链接');
 
-      const videoId = extractYoutubeVideoId(url);
+      const sanitizedUrl = sanitizeYoutubeUrl(url);
+      const videoId = extractYoutubeVideoId(sanitizedUrl);
       const baseDir = app.getPath('downloads');
       const targetDir = path.join(baseDir, videoId);
       fs.mkdirSync(targetDir, { recursive: true });
@@ -360,7 +421,7 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
       const command = buildYtDlpCommand(
         {
           ...options,
-          url,
+          url: sanitizedUrl,
         },
         targetDir
       );
@@ -375,13 +436,20 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
     async (
       _e,
       videoPath: string,
-      cues: SubtitleCue[]
+      cues: SubtitleCue[],
+      selection?: {
+        plain?: boolean;
+        english?: boolean;
+        bilingual?: boolean;
+        dubbed?: boolean;
+      }
     ): Promise<ExportedVideoSet> => {
       try {
-        sendProgress('export-video', '开始导出学习视频…', 0);
+        sendProgress('export-video', '开始导出视频…', 0);
         const result = await exportStudyVideos({
           videoPath,
           cues,
+          selection,
           onProgress: (percent, message) => sendProgress('export-video', message, percent),
         });
         sendProgress('done', '视频导出完成', 100);

@@ -29,9 +29,19 @@ export interface UploadedSegment extends AudioSegment {
 
 export interface ExportedVideoSet {
   outputDir: string;
-  plainVideoPath: string;
-  englishSubtitleVideoPath: string;
-  bilingualSubtitleVideoPath: string;
+  plainVideoPath?: string;
+  englishSubtitleVideoPath?: string;
+  bilingualSubtitleVideoPath?: string;
+  dubbedVideoPath?: string;
+}
+
+export type StudyVideoExportKind = 'plain' | 'english' | 'bilingual' | 'dubbed';
+
+export interface StudyVideoExportSelection {
+  plain: boolean;
+  english: boolean;
+  bilingual: boolean;
+  dubbed: boolean;
 }
 
 export interface DubbedVideoResult {
@@ -147,7 +157,8 @@ declare global {
       ) => Promise<{ outputDir: string; files: string[] }>;
       exportStudyVideos: (
         videoPath: string,
-        cues: SubtitleCue[]
+        cues: SubtitleCue[],
+        selection?: StudyVideoExportSelection
       ) => Promise<ExportedVideoSet>;
       exportChineseDubbedVideo: (
         videoPath: string,

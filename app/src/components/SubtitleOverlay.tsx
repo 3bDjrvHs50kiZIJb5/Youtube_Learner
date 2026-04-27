@@ -191,6 +191,7 @@ export function SubtitleOverlay({ onAddWord }: Props) {
 
   const handleWordClick = (word: string, cueId: number, e: React.MouseEvent) => {
     e.stopPropagation();
+    if (!cur?.text) return;
     const rect = (e.target as HTMLElement).getBoundingClientRect();
     const cleanWord = word.toLowerCase().replace(/^[^a-z]+|[^a-z]+$/gi, '');
     if (!cleanWord) return;
