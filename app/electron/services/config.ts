@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import Store from 'electron-store';
 
 export interface AppTTSConfig {
@@ -64,21 +67,59 @@ const store = new Store<AppConfig>({
   defaults,
 });
 
-export function getConfig(): AppConfig {
-  const stored = store.store;
-  const storedOss = stored.oss || defaults.oss;
-  return {
-    dashscopeApiKey: store.get('dashscopeApiKey') || '',
-    oss: {
-      region: storedOss.region || DEFAULT_OSS.region,
-      bucket: storedOss.bucket || DEFAULT_OSS.bucket,
-      accessKeyId: storedOss.accessKeyId || '',
-      accessKeySecret: storedOss.accessKeySecret || '',
-      prefix: storedOss.prefix || DEFAULT_OSS.prefix,
-    },
-    translateTarget: store.get('translateTarget') || '中文',
-    tts: { ...defaults.tts, ...(store.get('tts') || {}) },
-  };
+/**
+ * 命令行脚本直接跑服务层时, electron-store 可能拿不到 Electron 里的默认 userData。
+ * 这里补一个“读现成 JSON 文件”的兜底,这样脚本和 GUI 共用同一份配置。
+ */
+function resolveExternalConfigCandidates(): string[] {
+  const explicit = process.env.VIDEO_LEARNER_CONFIG_PATH?.trim();
+  if (explicit) return [explicit];
+
+  if (process.platform === 'darwin') {
+    const base = path.join(os.homedir(), 'Library', 'Application Support', 'video-learner');
+    return [
+      path.join(base, 'video-learner-config.json'),
+      path.join(base, 'config.json'),
+    ];
+  }
+
+  if (process.platform === 'win32') {
+    const appData =
+      process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    const base = path.join(appData, 'video-learner');
+    return [
+      path.join(base, 'video-learner-config.json'),
+      path.join(base, 'config.json'),
+    ];
+  }
+
+  const configHome =
+    process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
+  const base = path.join(configHome, 'video-learner');
+  return [
+    path.join(base, 'video-learner-config.json'),
+    path.join(base, 'config.json'),
+  ];
+}
+
+function pickExternalConfigPath(): string | null {
+  const candidates = resolveExternalConfigCandidates();
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(candidate)) return candidate;
+  }
+  return candidates[0] || null;
+}
+
+function loadExternalConfig(): Partial<AppConfig> | null {
+  const file = pickExternalConfigPath();
+  if (!file || !fs.existsSync(file)) return null;
+
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf-8')) as Partial<AppConfig>;
+  } catch (err) {
+    console.warn('[config] 外部配置读取失败:', file, err);
+    return null;
+  }
 }
 
 /**
@@ -92,6 +133,52 @@ function stripUndefined<T extends object>(obj: T): Partial<T> {
     if (v !== undefined) out[key] = v;
   }
   return out;
+}
+
+function preferNonEmpty(current: string | undefined, fallback: string | undefined): string {
+  if (current && current.trim()) return current;
+  return fallback || '';
+}
+
+function mergeFallbackConfig(base: AppConfig, fallback: Partial<AppConfig> | null): AppConfig {
+  if (!fallback) return base;
+  const fallbackOss = fallback.oss || {};
+
+  return {
+    dashscopeApiKey: preferNonEmpty(base.dashscopeApiKey, fallback.dashscopeApiKey),
+    oss: {
+      region: preferNonEmpty(base.oss.region, fallbackOss.region || DEFAULT_OSS.region),
+      bucket: preferNonEmpty(base.oss.bucket, fallbackOss.bucket || DEFAULT_OSS.bucket),
+      accessKeyId: preferNonEmpty(base.oss.accessKeyId, fallbackOss.accessKeyId),
+      accessKeySecret: preferNonEmpty(base.oss.accessKeySecret, fallbackOss.accessKeySecret),
+      prefix: preferNonEmpty(base.oss.prefix, fallbackOss.prefix || DEFAULT_OSS.prefix),
+    },
+    translateTarget: preferNonEmpty(base.translateTarget, fallback.translateTarget || '中文'),
+    tts: {
+      ...defaults.tts,
+      ...stripUndefined(fallback.tts || {}),
+      ...stripUndefined(base.tts || {}),
+    },
+  };
+}
+
+export function getConfig(): AppConfig {
+  const stored = store.store;
+  const storedOss = stored.oss || defaults.oss;
+  const configFromStore: AppConfig = {
+    dashscopeApiKey: store.get('dashscopeApiKey') || '',
+    oss: {
+      region: storedOss.region || DEFAULT_OSS.region,
+      bucket: storedOss.bucket || DEFAULT_OSS.bucket,
+      accessKeyId: storedOss.accessKeyId || '',
+      accessKeySecret: storedOss.accessKeySecret || '',
+      prefix: storedOss.prefix || DEFAULT_OSS.prefix,
+    },
+    translateTarget: store.get('translateTarget') || '中文',
+    tts: { ...defaults.tts, ...(store.get('tts') || {}) },
+  };
+
+  return mergeFallbackConfig(configFromStore, loadExternalConfig());
 }
 
 export function setConfig(cfg: Partial<AppConfig>) {
